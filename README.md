@@ -1,100 +1,55 @@
 # fish-body（鱼的身体）
 
-> DeepSeek Harness（DSH）上的「身体层」插件：把**流程入口、目录查看、开关状态**收在一处，并让内置工具按开关上下线。
->
-> The "body" layer of a DSH agent framework: one place for the workflow entry, directory browsing and the on/off switch, plus a switch-driven tool mount.
+一个 DSH bundle，包含饭（固定上游材料）→胃（审查、依赖准备、构建）→手（受管包、决定、部署和恢复）的现有完整后端、设置页及内置 SHA-256。无需另找未发布的 fish-hand 后端。
 
----
+**官方原版仍无安装事务扩展；配套扩展为隔离验证原型。** 根入口检测宿主明确导出的 `installTransactionExtensionVersion=1`，官方 rc.5 继续显示 `FISH_NATIVE_INSTALL_INTERCEPT_UNAVAILABLE`。扩展宿主按已选择 bundle 的 `dsh.installTransaction` 元数据调用现有后端，然后由原生执行器安装同一受管 tgz，保留兼容性、失败和恢复语义。插件不会自行修改宿主。
 
-## 这是什么
+## 安装入口与运行要求
 
-`fish-body` 是一个 DSH 宿主侧插件，给 agent 框架补上**「身体」这一层的可见与可控性**：
+需要 DSH 和 Node `>=22.14`。已验证官方 `0.2.1-rc.5` 的插件生命周期、后端挂载与资源释放，不声称完整安装接管已验证。
 
-- 在设置页里告诉人「饭（来源仓）→ 胃（审查暂存）→ 手（安装审批）」这条流程当前是否可用；
-- 提供只读的分区元数据与「打开文件夹」动作，让人不用记路径；
-- 挂一个 **SHA-256 工具**（`utility_sha256`）给 agent 用，但**只在身体开启时挂载**，关闭即下线。
+当前版本为 `0.0.2`。可使用 GitHub 根仓库入口；开发者也可在仓库根执行 `npm pack --ignore-scripts`，把生成的 `fish-body-0.0.2.tgz` 作为 `file:<绝对 tgz 路径>` 交给 DSH 原生插件管理。启停以原生插件选择为准，不增加第二个总开关。完整安装接管需要上述配套宿主扩展；“换用线上版本”另需市场可选接口支持。
 
-它**不是**插件市场，也不替 agent 做安装决定——安装与审批由「鱼的手（fish-hand）」负责，`fish-body` 只提供入口与开关投影。
+## 首次初始化与数据
 
-## 功能
+每个 DSH Profile 保存一份 `<Profile>/fish-data.json`，鱼脑和身体共用：
 
-| 功能 | 说明 |
-|---|---|
-| **设置页分区** | 注册 `GET /api/fish-body/sections`、`GET /api/fish-body/state`、`POST /api/fish-body/open`；`client.js` 渲染成设置页卡片 |
-| **身体总开关（phase）** | 开关的唯一事实来源是 profile 的 `dsh.profile.bundles` 是否包含 `fish-body`（以及 patch 行是否 `disabled: true`）；三态 `on / closing / off`，读不到按 **on** 处理（绝不误关） |
-| **流程停启** | `off` 时不再启动「饭→胃→手」流程，页面显示「已关闭，等待原生重载」 |
-| **内置 SHA-256 工具** | 通过 `ctx.inject(['tools'], …)` 动态挂载；运行门校验失败被隔离在 effect 内，**不影响分区接口** |
-| **打开文件夹** | 只接受白名单里的分区 id，固定参数调 `explorer.exe`，不拼 shell、不接受外部路径 |
-
-## 安装
-
-```bash
-# 方式一：从 GitHub 直接装
-dsh plugin --profile <profile> add github:2233heorbrin/fish-body
-
-# 方式二：克隆后本地装
-git clone https://github.com/2233heorbrin/fish-body.git
-dsh plugin --profile <profile> add file:<克隆路径>/fish-body
+```json
+{"schema":"fish-profile-data/v1","root":"<绝对数据根目录>","components":["brain","body"],"origin":"conversation-workspace"}
 ```
 
-装好后在 **设置 → 插件** 里能看到「鱼的身体」，打开开关即可。
+- 尚未初始化时，从**当前主对话实际绑定的工作区**取根目录；不使用进程 cwd、安装目录或最近会话。没有有效工作区时显示“待选择工作区”，在页面选文件夹后继续。
+- 先装脑或先装身体均可，后装者复用绑定，只补齐自己的目录。两个插件可以分别安装。
+- 绑定后切换会话不换根。页面显示实际路径，可打开对应文件夹。
+- 手动切换数据位置只更新绑定、补齐新目录，**不会搬迁旧数据**。已经挂载的身体后端需要重新加载才能使用新根，期间拒绝向旧根启动新流程。
+- 多个 Profile 各有绑定。可以人为选择相同数据根；这不会合并 Agent、开关或其他配置。
+- 升级时保留通过配置传入的有效旧根及已有文件，只补缺失结构。旧根失效时保留原路径并提示重选，不自动换位置。
+- 页面分别显示目录初始化和程序准备状态；`host-blocked` 不是完整功能就绪。失败显示原因，可点“重试准备”。
 
-## 配置（不用改源代码）
+## 后端与自动程序依赖
 
-```yaml
-# profile 的 cordis.patch.yml 里，fish-body 这一行
-- id: fish-body
-  name: fish-body
-  config:
-    fishRoot: "D:/你的工作区"          # 可选；默认取环境变量 FISH_HAND_FRAMEWORK_ROOT，再退回作者路径
-    profileDir: "…/profiles/<name>"    # 可选；默认取 profileContext
-    sections:                           # 可选；按分区覆盖
-      rice:    { title: "我的饭仓",   path: "E:/my-farm/rice" }
-      hand:    { path: "E:/my-farm/hand" }
-      stomach: { path: "E:/my-farm/stomach" }
+身体初始化 `<根>/饭`、`鱼的胃/{来源审查,脑组件,手组件}`、`鱼的手/{插件仓,插件注册表,运行数据,审计日志}`。共享绑定是数据根唯一权威；`<Profile>/fish-body-state.json` 是后端运行路径投影，不要把它当成另一份需要手动维护的根配置。
+
+完整后端在 `internal/backend/`，保留已实现的源码包身份、GitHub 子目录/固定 commit/归档回退、批准复用、依赖生命周期语义、产包、部署原有文件完整性、正常 .bin 生成入口及失败恢复。市场适配复用既有可选 `fish-body.market.v1` 接口，按 Profile 注册、随身体卸载撤销；没有该接口的市场不宣称已适配。
+
+固定正常依赖：`yaml@2.8.1`、`pnpm@12.4.2`、`npm@11.6.2`。优先使用宿主 ProfileContext 提供的包管理命令，缺省使用包内声明的 pnpm；npm 生命周期执行器来自声明的 npm 依赖，不依赖作者机器的隐藏安装。Node 优先使用当前 Node 进程，桌面宿主另需可用 Node；缺失会显示准备失败，不静默继续。自身无 install/build 脚本；候选插件确需执行的生命周期钩子仍按现有授权处理。
+
+不需要安装鱼脑；身体不读取人格或记忆。普通工具安装意图、权限、新增执行范围和完整性沿用原流程；不是通过放宽准入来解决发行问题。
+
+## 原生开关和限制
+
+关闭身体插件时，本 Profile 已接纳的身体操作先收尾，期间拒绝新流程；实际 Cordis 卸载释放路由、fish_hand 及 utility_sha256，另一个 Profile 和独立工具保持可用。已有文件和记录保留，不主动开关独立插件。
+
+扩展宿主仅在身体 bundle 已选择时调用事务入口；关闭后原生安装不读取身体注册表、不产生身体审计。普通启用、停用不经过安装事务。既有独立插件不随身体卸载。官方原版和扩展版的验收必须分别报告。
+
+## 开发验证
+
+将发行物独立安装在临时目录，设置 `FISH_TEST_INSTALL_ROOT`；官方原生测试另设 `FISH_DSH_TEST_ANCHOR` 为临时官方宿主 package.json。
+
+```sh
+node --test test/distribution.test.mjs test/backend-*.test.mjs test/official-native.test.mjs
 ```
 
-- `fishRoot` 会把默认的 `饭 / 鱼的手 / 鱼的胃` 三个路径整体换根；
-- `sections.<id>.path` 可以只改某一个分区；
-- 三者都不给时，仍用仓库里的默认值（作者本机路径），因此**别的机器上手必须设置 `fishRoot` 或 `sections`**。
+包含真实本地产包、依赖生命周期、源码身份、Git/归档替身、本地离线 pnpm 安装与部署校验、多 Profile 状态隔离及原生卸载。网络测试不是 GitHub 在线验收；路由与文件夹打开测试使用最小连接/桌面 opener 接缝，不是完整桌面点击验收。未在生产安装或重启，没有真实市场安装验收。
 
-## 依赖
-
-| 依赖 | 关系 | 缺失后果 |
-|---|---|---|
-| `@deepseek-ai/fish-hand-admission-gate`（鱼手准入包，提供 `lib/body-switch.mjs`） | **可选**（`peerDependenciesMeta.optional`） | 已做保护：解析失败时身体照常加载，**分区与页面可用**，只是没有 `phase` 投影（`/api/fish-body/state` 不注册） |
-| `fish-hand-runtime-gate` + `fish-hand-utility-sha256` | **可选** | 内置 `utility_sha256` 不挂载；分区与开关不受影响 |
-
-> 说明：本仓库**不包含**「饭→胃→手」流程的完整实现（下载、审查、审批、安装）。那部分属于鱼手（fish-hand）的准入链路，本仓库只发布身体侧的入口与开关投影。
-
-## 已知限制
-
-1. **「饭→胃→手」流程需要鱼手**：只装 `fish-body` 只能看到入口与开关；真正执行安装/审批的是鱼手，未安装时该流程不可用（不会报错，只是状态为不可用）。
-2. **默认路径是作者本机路径**：`index.js` 里的 `SECTIONS` 默认值指向作者的 `D:/deepseek框架`。请在 profile 配置里设置 `fishRoot` 或 `sections`（见上）。
-3. **关闭身体的边界**：关闭后撤下的是**本插件提供的流程入口、设置页与内置工具**；已在 profile 里安装的独立插件（如 `dsh-context`）**不受影响**，普通插件安装继续走 DSH 原生机制。
-4. **模型不能自行开启身体**：开关必须由用户在插件页操作。
-
-## 目录结构
-
-```
-fish-body/
-├── index.js                 宿主侧：分区路由 / 开关状态 / 工具挂载（config 驱动）
-├── client.js                客户端：设置页 UI
-├── cordis.patch.yml         bundle 补丁：把本插件插入 profile 的层叠
-├── internal/
-│   ├── runtime-gate.js      调运行门做插件校验（可选，缺失即降级）
-│   └── utility-sha256.js    L0 工具包装
-├── locale/{en,zh}.json      文案
-└── icon.svg
-```
-
-## 设计约定
-
-- 开关只认配置，不写额外状态文件；
-- 工具挂载失败只记录错误码，绝不拖垮分区接口；
-- 不碰凭据：不读、不存任何 token/密钥；
-- 打开路径白名单：只认固定分区 id，拒绝路径穿越。
-
-## 许可
-
-MIT © 2026 酥软大肥鱼（2233heorbrin）
+MIT，第三方来源与许可见 THIRD-PARTY-NOTICES.md。

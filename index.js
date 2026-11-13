@@ -4,47 +4,35 @@
  */
 
 import { stat } from 'node:fs/promises'
+import { ProfileData, mountProfileData } from './internal/profile-data.js'
+import * as localSwitch from './internal/backend/lib/body-switch.mjs'
+import { prepareBackend } from './internal/backend-entry.js'
 import { spawn } from 'node:child_process'
-import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
-
-function bodySwitchModule(ctx, config) {
-  if (config.bodySwitchModule) return config.bodySwitchModule
-  const anchor = ctx.get?.('profileContext')?.installAnchor
-  if (!anchor) return null
-  try {
-    const req = createRequire(anchor)
-    return req(join(dirname(req.resolve('@deepseek-ai/fish-hand-admission-gate')), 'lib/body-switch.mjs'))
-  } catch {
-    /* 干净环境（未装鱼手）时身体仍可用：分区与页面保留，只是不提供流程相位的投影。 */
-    return null
-  }
-}
+import { join } from 'node:path'
 
 export const name = 'fish-body'
 export const inject = ['connection', 'sessionController']
 
 /* 唯一一份映射：id → 标题 / 说明 / 真实目录。对象键顺序即设置页分段顺序。 */
-/* 默认根目录：可用 config.fishRoot 或环境变量 FISH_HAND_FRAMEWORK_ROOT 覆盖，
-   避免把作者本机的盘符写死；config.sections[id] 还可按分区覆盖 title/description/path。 */
-const DEFAULT_FISH_ROOT = (process.env.FISH_HAND_FRAMEWORK_ROOT || 'D:\\deepseek框架').replace(/[\\/]+$/, '')
+/* Root comes from the shared Profile binding; fishRoot is an existing-user input. */
+const DEFAULT_FISH_ROOT = ''
 /* 分区 id → 目录名。根目录变化时直接拼接，避免"替换基准变了但原路径没变"的错。 */
 const SECTION_FOLDERS = Object.freeze({ rice: '饭', hand: '鱼的手', stomach: '鱼的胃' })
 const SECTIONS = {
   rice: {
     title: '鱼的饭',
     description: '保存插件上游源码与下载材料。',
-    path: 'D:\\deepseek框架\\饭'
+    path: null
   },
   hand: {
     title: '鱼的手',
     description: '管理工具插件及其运行相关目录。',
-    path: 'D:\\deepseek框架\\鱼的手'
+    path: null
   },
   stomach: {
     title: '鱼的胃',
     description: '存放插件分析、拆分与适配产物。',
-    path: 'D:\\deepseek框架\\鱼的胃'
+    path: null
   }
 }
 
@@ -150,7 +138,7 @@ function buildSections(config = {}) {
   const out = {}
   for (const [id, entry] of Object.entries(SECTIONS)) {
     const folder = SECTION_FOLDERS[id] || id
-    out[id] = { ...entry, path: join(root, folder) }
+    out[id] = { ...entry, path: root ? join(root, folder) : null }
   }
   const overrides = (config && typeof config.sections === 'object' && config.sections) || {}
   for (const [id, override] of Object.entries(overrides)) {
@@ -195,12 +183,30 @@ function classifyRemoteFailure(error) {
   return { kind: 'opener', reason: '宿主打开方式失败。' }
 }
 
-export function apply(ctx, config = {}) {
+export async function apply(ctx, config = {}) {
   // The native switch remains authoritative. This projection also tells a
   // startup-only Host's UI that its page unload is waiting for native restart.
-  const bridge = config.bodySwitchModule || (ctx.get ? bodySwitchModule(ctx, config) : null)
+  const bridge = config.bodySwitchModule || localSwitch
   const hints = { profileDir: config.profileDir || ctx.get?.('profileContext')?.dir }
-  const sectionsMap = buildSections(config)
+  // Native disposal joins exactly this Profile's admitted body operations.
+  ctx.effect(() => () => localSwitch.runBodySwitchChange({ profileDir: hints.profileDir, enabled: false, operation: async () => {} }))
+  const profileDir = config.profileDir || ctx.get?.('profileContext')?.dir
+  const data = new ProfileData(profileDir, 'body', { legacyRoot: config.fishRoot })
+  let backend = null
+  await mountProfileData(ctx, data, { prepare: async state => {
+    if (backend && backend.root !== state.root) return { status: 'restart-required', error: '新位置已保存；当前流程收尾后请重新加载身体。旧数据未搬迁。' }
+    if (!backend) {
+      const prepared = prepareBackend(ctx, state)
+      await prepared.handle.await()
+      if (prepared.handle.state !== 2) throw new Error('FISH_BACKEND_LOAD_FAILED: 身体后端未完成原生加载，请检查宿主服务后重试')
+      backend = { ...prepared, root: state.root }
+      if ((await prepared.capability).installTransactionExtensionVersion === 1) {
+        backend.status = 'ready'; backend.code = null; backend.error = null
+      }
+    }
+    return { status: backend.status, code: backend.code, error: backend.error, backend: 'bundled', configPath: backend.configPath }
+  } })
+  const sections = () => buildSections({ ...config, fishRoot: data.state().root })
   if (bridge) register(ctx, '/api/fish-body/state', ['GET', 'HEAD'], request => {
     const state = bridge.readBodyPhase(hints)
     return jsonResponse(request, { ...state,
@@ -211,13 +217,14 @@ export function apply(ctx, config = {}) {
     })
   })
   register(ctx, '/api/fish-body/sections', ['GET', 'HEAD'], async (request) => {
-    const sections = Object.keys(sectionsMap).map((id) => ({
+    const sectionsMap = sections()
+    const entries = Object.keys(sectionsMap).map((id) => ({
       id,
       title: sectionsMap[id].title,
       description: sectionsMap[id].description,
       path: sectionsMap[id].path
     }))
-    return jsonResponse(request, { sections })
+    return jsonResponse(request, { sections: entries })
   })
 
   register(ctx, '/api/fish-body/open', ['POST'], async (request) => {
@@ -231,7 +238,7 @@ export function apply(ctx, config = {}) {
     const section = payload && typeof payload === 'object' && !Array.isArray(payload)
       ? payload.section
       : undefined
-    const entry = resolveSection(sectionsMap, section)
+    const entry = resolveSection(sections(), section)
     if (!entry) {
       return jsonResponse(request, { ok: false, error: '未知的分区 id。', path: null }, 400)
     }
