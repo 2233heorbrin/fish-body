@@ -42,5 +42,13 @@
     "dsh-plugin",
     "deepseek-harness",
     "dsh"
-  ]
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/fish-hand-admission-gate": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/fish-hand-admission-gate": {
+      "optional": true
+    }
+  }
 }

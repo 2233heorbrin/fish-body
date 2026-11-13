@@ -12,14 +12,22 @@ function bodySwitchModule(ctx, config) {
   if (config.bodySwitchModule) return config.bodySwitchModule
   const anchor = ctx.get?.('profileContext')?.installAnchor
   if (!anchor) return null
-  const req = createRequire(anchor)
-  return req(join(dirname(req.resolve('@deepseek-ai/fish-hand-admission-gate')), 'lib/body-switch.mjs'))
+  try {
+    const req = createRequire(anchor)
+    return req(join(dirname(req.resolve('@deepseek-ai/fish-hand-admission-gate')), 'lib/body-switch.mjs'))
+  } catch {
+    /* 干净环境（未装鱼手）时身体仍可用：分区与页面保留，只是不提供流程相位的投影。 */
+    return null
+  }
 }
 
 export const name = 'fish-body'
 export const inject = ['connection', 'sessionController']
 
 /* 唯一一份映射：id → 标题 / 说明 / 真实目录。对象键顺序即设置页分段顺序。 */
+/* 默认根目录：可用 config.fishRoot 或环境变量 FISH_HAND_FRAMEWORK_ROOT 覆盖，
+   避免把作者本机的盘符写死；config.sections[id] 还可按分区覆盖 title/description/path。 */
+const DEFAULT_FISH_ROOT = (process.env.FISH_HAND_FRAMEWORK_ROOT || 'D:\\deepseek框架').replace(/[\\/]+$/, '')
 const SECTIONS = {
   rice: {
     title: '鱼的饭',
@@ -133,10 +141,26 @@ function jsonResponse(request, value, status = 200) {
   })
 }
 
-/* 严格白名单：只认 SECTIONS 自身的键，任何其它 id 一律拒绝。 */
-function resolveSection(id) {
-  return typeof id === 'string' && Object.prototype.hasOwnProperty.call(SECTIONS, id)
-    ? SECTIONS[id]
+/* 由默认映射 + 根目录 + 分区级覆盖，得到本次运行实际使用的分区表。 */
+function buildSections(config = {}) {
+  const rawRoot = typeof config.fishRoot === 'string' ? config.fishRoot.trim() : ''
+  const root = (rawRoot || DEFAULT_FISH_ROOT).replace(/[\\/]+$/, '')
+  const out = {}
+  for (const [id, entry] of Object.entries(SECTIONS)) {
+    const path = root === DEFAULT_FISH_ROOT ? entry.path : entry.path.replace(DEFAULT_FISH_ROOT, root)
+    out[id] = { ...entry, path }
+  }
+  const overrides = (config && typeof config.sections === 'object' && config.sections) || {}
+  for (const [id, override] of Object.entries(overrides)) {
+    if (out[id] && override && typeof override === 'object') out[id] = { ...out[id], ...override }
+  }
+  return out
+}
+
+/* 严格白名单：只认分区表自身的键，任何其它 id 一律拒绝。 */
+function resolveSection(sectionsMap, id) {
+  return typeof id === 'string' && Object.prototype.hasOwnProperty.call(sectionsMap, id)
+    ? sectionsMap[id]
     : null
 }
 
@@ -174,6 +198,7 @@ export function apply(ctx, config = {}) {
   // startup-only Host's UI that its page unload is waiting for native restart.
   const bridge = config.bodySwitchModule || (ctx.get ? bodySwitchModule(ctx, config) : null)
   const hints = { profileDir: config.profileDir || ctx.get?.('profileContext')?.dir }
+  const sectionsMap = buildSections(config)
   if (bridge) register(ctx, '/api/fish-body/state', ['GET', 'HEAD'], request => {
     const state = bridge.readBodyPhase(hints)
     return jsonResponse(request, { ...state,
@@ -184,11 +209,11 @@ export function apply(ctx, config = {}) {
     })
   })
   register(ctx, '/api/fish-body/sections', ['GET', 'HEAD'], async (request) => {
-    const sections = Object.keys(SECTIONS).map((id) => ({
+    const sections = Object.keys(sectionsMap).map((id) => ({
       id,
-      title: SECTIONS[id].title,
-      description: SECTIONS[id].description,
-      path: SECTIONS[id].path
+      title: sectionsMap[id].title,
+      description: sectionsMap[id].description,
+      path: sectionsMap[id].path
     }))
     return jsonResponse(request, { sections })
   })
@@ -204,7 +229,7 @@ export function apply(ctx, config = {}) {
     const section = payload && typeof payload === 'object' && !Array.isArray(payload)
       ? payload.section
       : undefined
-    const entry = resolveSection(section)
+    const entry = resolveSection(sectionsMap, section)
     if (!entry) {
       return jsonResponse(request, { ok: false, error: '未知的分区 id。', path: null }, 400)
     }
