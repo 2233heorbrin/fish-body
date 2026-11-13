@@ -1,0 +1,46 @@
+{
+  "name": "fish-body",
+  "version": "1.0.0",
+  "description": "「鱼的身体」由插件页的原生开关统一控制：开启时提供「饭→胃→手」统一接入流程、目录查看/打开与内置 SHA-256 工具；关闭后该流程、本设置页与内置 SHA-256 一并停用。如需按「饭→胃→手」统一流程安装插件，请由用户在插件页手动开启「鱼的身体」，模型不得自行开启。关闭期间普通插件安装仍走 DSH 原生机制、不受影响；已安装的独立插件（如 dsh-context）保持各自启用状态、不受影响。",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "internal/*.js"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2233heorbrin/fish-body.git"
+  },
+  "homepage": "https://github.com/2233heorbrin/fish-body",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh"
+  ]
+}

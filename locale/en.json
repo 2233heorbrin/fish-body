@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Fish Body (fish_body)",
+    "description": "Fish Body is controlled by the native toggle on the plugins page: when on it provides the Rice -> Stomach -> Hand unified intake flow, folder view/open actions, and the built-in SHA-256 tool; when off, that flow, this settings page, and the built-in SHA-256 tool are disabled together. To install a plugin through the Rice -> Stomach -> Hand unified flow, the user must manually enable Fish Body on the plugins page; the model must not enable it on its own. While off, ordinary plugin installation still goes through DSH native mechanisms and is unaffected; already-installed standalone plugins (e.g. dsh-context) keep their own enabled state and are unaffected."
+  }
+}
