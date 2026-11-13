@@ -28,6 +28,8 @@ export const inject = ['connection', 'sessionController']
 /* 默认根目录：可用 config.fishRoot 或环境变量 FISH_HAND_FRAMEWORK_ROOT 覆盖，
    避免把作者本机的盘符写死；config.sections[id] 还可按分区覆盖 title/description/path。 */
 const DEFAULT_FISH_ROOT = (process.env.FISH_HAND_FRAMEWORK_ROOT || 'D:\\deepseek框架').replace(/[\\/]+$/, '')
+/* 分区 id → 目录名。根目录变化时直接拼接，避免"替换基准变了但原路径没变"的错。 */
+const SECTION_FOLDERS = Object.freeze({ rice: '饭', hand: '鱼的手', stomach: '鱼的胃' })
 const SECTIONS = {
   rice: {
     title: '鱼的饭',
@@ -147,8 +149,8 @@ function buildSections(config = {}) {
   const root = (rawRoot || DEFAULT_FISH_ROOT).replace(/[\\/]+$/, '')
   const out = {}
   for (const [id, entry] of Object.entries(SECTIONS)) {
-    const path = root === DEFAULT_FISH_ROOT ? entry.path : entry.path.replace(DEFAULT_FISH_ROOT, root)
-    out[id] = { ...entry, path }
+    const folder = SECTION_FOLDERS[id] || id
+    out[id] = { ...entry, path: join(root, folder) }
   }
   const overrides = (config && typeof config.sections === 'object' && config.sections) || {}
   for (const [id, override] of Object.entries(overrides)) {
