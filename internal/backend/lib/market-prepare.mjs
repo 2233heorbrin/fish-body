@@ -98,11 +98,39 @@ export function prepareMarketRepair(input,report=()=>{}) {
   return {repair:true,prepared,resolutions};
 }
 
+function ipcError(message,cause=null) {
+  return Object.assign(new Error('FH_MARKET_PREPARE_IPC_FAILED: '+message+(cause?.message?': '+cause.message:'')),
+    {code:'FH_MARKET_PREPARE_IPC_FAILED',causeCode:cause?.code??null});
+}
+function sendMessage(message) {
+  return new Promise((resolve,reject)=>{
+    if(!process.send||!process.connected){reject(ipcError('IPC channel is not connected'));return;}
+    try {process.send(message,error=>error?reject(ipcError('IPC send failed',error)):resolve());}
+    catch(error) {reject(ipcError('IPC send threw',error));}
+  });
+}
+function errorPayload(error) {
+  return {code:error.code??'FH_MARKET_PREPARE_FAILED',message:error.message,reasons:error.reasons??null,
+    diagnostic:error.diagnostic??null,pnpmFailure:error.pnpmFailure??null,causeCode:error.causeCode??null};
+}
+function stderrFailure(error,sendError) {
+  const rows=[error?.code??'FH_MARKET_PREPARE_FAILED',error?.message,sendError?.code,sendError?.causeCode,sendError?.message].filter(Boolean);
+  process.stderr.write(rows.join(': ')+'\n');
+}
+
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href) {
-  process.once('message',input=>{
-    try {const report=stage=>process.send?.({stage});const value=input.repair?prepareMarketRepair(input,report):prepareMarketPackage(input,report);process.send?.({value});}
-    catch(error) {process.send?.({error:{code:error.code??'FH_MARKET_PREPARE_FAILED',message:error.message,reasons:error.reasons??null,
-      diagnostic:error.diagnostic??null,pnpmFailure:error.pnpmFailure??null}});}
-    finally {process.disconnect?.();}
+  process.once('message',async input=>{
+    let queue=Promise.resolve(),sendFailure=null;
+    const report=stage=>{queue=queue.then(()=>sendMessage({stage})).catch(error=>{sendFailure??=error;});};
+    try {
+      const value=input.repair?prepareMarketRepair(input,report):prepareMarketPackage(input,report);
+      await queue;if(sendFailure)throw sendFailure;await sendMessage({value});
+    }catch(error) {
+      await queue;
+      try {await sendMessage({error:errorPayload(error)});}
+      catch(sendError) {stderrFailure(error,sendError);process.exitCode=1;}
+    }finally {
+      if(process.connected)try {process.disconnect();}catch(error){stderrFailure(error,null);process.exitCode=1;}
+    }
   });
 }

@@ -1,4 +1,4 @@
-import { nativeNode } from './runtime-programs.mjs';
+import { nativeNodeRuntime } from './runtime-programs.mjs';
 // One optional dshmarket seam. Native manager remains alive when body is off,
 // so re-enabling uses the same bundle selection/lifecycle, not another switch.
 import { readFileSync, existsSync } from 'node:fs';
@@ -41,30 +41,74 @@ export function restorePreparedRegistration(conf,previous,prepared) {
   doc.plugins.push(previous?{...previous,previousVersions:history}:{...current,state:'prepared',active:false});
   atomicJson(conf.registryPath,doc);refreshProductionState();
 }
-export function prepareInChild(input,{signal,onStage=()=>{}}={}) {
+function redactProcessOutput(value) {
+  return String(value??'')
+    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi,'$1[redacted]@')
+    .replace(/([?&](?:token|access_token|auth|key|api_key|signature|sig)=)[^&\s]+/gi,'$1[redacted]')
+    .replace(/((?:authorization|proxy-authorization)\s*[:=]\s*)[^\r\n]+/gi,'$1[redacted]')
+    .replace(/((?:_authToken|_auth|password|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*)[^\s,;]+/gi,'$1[redacted]')
+    .slice(-12000);
+}
+function prepareProcessError(code,message,cause,details={}) {
+  const suffix=cause?.message?': '+cause.message:'';
+  return Object.assign(new Error(code+': '+message+suffix),{code,causeCode:cause?.code??null,...details});
+}
+export function prepareInChild(input,{signal,onStage=()=>{},entry=fileURLToPath(new URL('./market-prepare.mjs',import.meta.url)),runtime=null,forkProcess=fork}={}) {
   signal?.throwIfAborted();
   return new Promise((resolve,reject)=>{
-    let result,error,killer=null;
-    const child=fork(fileURLToPath(new URL('./market-prepare.mjs',import.meta.url)),[],
-      {execPath:nativeNode(),stdio:['ignore','ignore','ignore','ipc'],windowsHide:true, env:{...process.env,FISH_HAND_STATE:stateConfigPath()}});
-    const cancel=()=>{
-      if(process.platform==='win32' && child.pid) killer=new Promise(done=>{
+    let selected;
+    try {selected=runtime??nativeNodeRuntime();}
+    catch(error) {reject(error);return;}
+    const childEnv={...(selected.env??process.env)};
+    const statePath=stateConfigPath();
+    if(statePath)childEnv.FISH_HAND_STATE=statePath;else delete childEnv.FISH_HAND_STATE;
+    let child;
+    try {child=forkProcess(entry,[],{execPath:selected.command,stdio:['ignore','ignore','pipe','ipc'],windowsHide:true,env:childEnv});}
+    catch(cause) {reject(prepareProcessError('FH_MARKET_PREPARE_START_FAILED','准备进程启动失败',cause,{runtime:selected.command,runtimeSource:selected.source}));return;}
+    let result,resultSeen=false,structuredError=null,stderr='',exitCode=null,exitSignal=null,killer=null,finished=false;
+    const failures=[];
+    const recordFailure=(kind,code,cause)=>{if(finished)return;failures.push({kind,code,cause});};
+    const terminate=()=>{
+      if(killer||child.exitCode!==null||child.signalCode!==null)return;
+      if(process.platform==='win32'&&child.pid)killer=new Promise(done=>{
         const kill=spawn('taskkill.exe',['/pid',String(child.pid),'/t','/f'],{windowsHide:true,stdio:'ignore'});
-        kill.once('close',done);kill.once('error',()=>{child.kill();done();});
+        kill.once('close',done);kill.once('error',()=>{try{child.kill();}catch{}done();});
       });
-      else child.kill('SIGTERM');
+      else {try{child.kill('SIGTERM');}catch{}}
+    };
+    const cancel=()=>terminate();
+    const onStderr=buffer=>{stderr+=buffer.toString();};
+    const onMessage=message=>{
+      if(message?.stage)try {onStage(message.stage);} catch(cause) {
+        recordFailure('stage','FH_MARKET_PREPARE_STAGE_FAILED',cause);terminate();return;
+      }
+      if(Object.hasOwn(message??{},'value')){result=message.value;resultSeen=true;}
+      if(message?.error)structuredError=Object.assign(new Error(message.error.message),message.error);
+    };
+    const onError=cause=>recordFailure('process','FH_MARKET_PREPARE_START_FAILED',cause);
+    const onExit=(code,childSignal)=>{exitCode=code;exitSignal=childSignal;};
+    const cleanup=()=>{
+      signal?.removeEventListener('abort',cancel);
+      child.stderr?.off('data',onStderr);child.off('message',onMessage);child.off('error',onError);child.off('exit',onExit);child.off('close',onClose);
+    };
+    const onClose=async(code,childSignal)=>{
+      if(finished)return;finished=true;
+      await killer;exitCode=code??exitCode;exitSignal=childSignal??exitSignal;cleanup();
+      const details={runtime:selected.command,runtimeSource:selected.source,exitCode,signal:exitSignal,stderr:redactProcessOutput(stderr),
+        processErrors:failures.map(row=>({kind:row.kind,code:row.cause?.code??row.code,message:row.cause?.message??String(row.cause)}))};
+      if(signal?.aborted){reject(Object.assign(new Error('准备已取消；未部署，可手动重试'),{name:'AbortError',code:'FH_MARKET_CANCELLED',...details}));return;}
+      if(resultSeen&&(exitCode!==0||exitSignal)){reject(prepareProcessError('FH_MARKET_PREPARE_EXIT_AFTER_RESULT','准备进程返回结果后异常退出',null,details));return;}
+      if(structuredError){reject(Object.assign(structuredError,details));return;}
+      if(failures.length){const first=failures[0];reject(prepareProcessError(first.code,first.kind==='ipc'?'准备进程通信失败':'准备进程启动或运行失败',first.cause,details));return;}
+      if(resultSeen){resolve(result);return;}
+      reject(prepareProcessError('FH_MARKET_PREPARE_EXIT','准备进程未返回结果；未安装',null,details));
     };
     signal?.addEventListener('abort',cancel,{once:true});
-    child.on('message',message=>{if(message.stage)onStage(message.stage);if(message.value)result=message.value;if(message.error)error=Object.assign(new Error(message.error.message),message.error);});
-    child.once('error',e=>{error=e;});
-    child.once('close',async()=>{
-      await killer;signal?.removeEventListener('abort',cancel);
-      if(signal?.aborted)reject(Object.assign(new Error('准备已取消；未部署，可手动重试'),{name:'AbortError'}));
-      else if(error)reject(error);
-      else if(result)resolve(result);
-      else reject(new Error('FH_MARKET_PREPARE_EXIT: 准备进程未返回结果；未安装'));
-    });
-    child.send(input);
+    if(signal?.aborted)cancel();
+    child.stderr?.on('data',onStderr);child.on('message',onMessage);child.on('error',onError);child.on('exit',onExit);child.once('close',onClose);
+    if(!child.connected){recordFailure('ipc','FH_MARKET_PREPARE_IPC_FAILED',new Error('IPC channel is not connected'));terminate();return;}
+    try {child.send(input,error=>{if(error){recordFailure('ipc','FH_MARKET_PREPARE_IPC_FAILED',error);terminate();}});}
+    catch(error) {recordFailure('ipc','FH_MARKET_PREPARE_IPC_FAILED',error);terminate();}
   });
 }
 function selectVersion(conf,profileDir,spec) {
@@ -175,7 +219,9 @@ export function createMarketBodyAdapter({profileDir,switchBody=null,prepare=prep
           const cancelled=signal?.aborted||error.name==='AbortError';
           const reasons=(error.reasons??[]).map(r=>`${r.file}:${r.line} (${r.kind})`).join('; ');
           const failure=error.pnpmFailure;
-          return {exitCode:cancelled?130:1,timedOut:false,cancelled,stdout:failure?.stdout??'',stderr:[error.message,reasons,failure?.stderr].filter(Boolean).join('\n'),
+          const processDiagnostic=[error.stderr,Number.isInteger(error.exitCode)?'exitCode='+error.exitCode:null,error.signal?'signal='+error.signal:null,
+            error.causeCode?'causeCode='+error.causeCode:null].filter(Boolean).join('\n');
+          return {exitCode:cancelled?130:1,timedOut:false,cancelled,stdout:failure?.stdout??'',stderr:[error.message,reasons,processDiagnostic,failure?.stderr].filter(Boolean).join('\n'),
             ...(failure?{pnpmFailure:failure,pnpmError:error.message,pnpmErrorCode:failure.code}:{}),
             wroteNothing:!deployed,bodyHandled:true,refusalCode:error.code??(cancelled?'FH_MARKET_CANCELLED':'FH_MARKET_FAILED')};
         }

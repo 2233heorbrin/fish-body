@@ -1,4 +1,4 @@
-import { packageManagerCommand, nativeNode } from './runtime-programs.mjs';
+import { packageManagerCommand, nativeNodeRuntime } from './runtime-programs.mjs';
 import { extract as extractTar } from 'tar';
 /** Approved source -> stomach dependency/build workspace -> immutable runnable tarball.
  * Source, resolved dependencies, tarball and installed files have separate identities.
@@ -161,7 +161,7 @@ function redactOutput(value) {
 export function runPnpm(args,cwd,runner) {
   if(runner) return runner(args,cwd);
   try {const manager=packageManagerCommand();return execFileSync(manager.command,[...manager.args,...args],{cwd,stdio:['ignore','pipe','pipe'],maxBuffer:32*1024*1024,windowsHide:true,
-    env:{...process.env,CI:'true',HUSKY:'0'}}).toString();}
+    env:{...process.env,...manager.env,CI:'true',HUSKY:'0'}}).toString();}
   catch (cause) {
     const stdout=redactOutput(cause?.stdout).slice(0,12000),stderr=redactOutput(cause?.stderr).slice(0,12000);
     const raw=[stderr,stdout].join('\n').replace(/(https?:\/\/)\s*\r?\n\s*/g,'$1');
@@ -186,10 +186,10 @@ function runHook(hook,script,cwd,root,runner) {
   if(runner)return runner(['lifecycle',hook],cwd,{hook,script,root});
   try {
     // The desktop Host may be DSH.exe rather than a Node CLI executable.
-    const node=nativeNode();
-    execFileSync(node,[fileURLToPath(new URL('./w6-lifecycle.mjs',import.meta.url))],{
+    const runtime=nativeNodeRuntime();
+    execFileSync(runtime.command,[fileURLToPath(new URL('./w6-lifecycle.mjs',import.meta.url))],{
       cwd,input:JSON.stringify({hook,script,cwd,root}),stdio:['pipe','pipe','pipe'],maxBuffer:32*1024*1024,windowsHide:true,
-      env:{...process.env,CI:'true',HUSKY:'0'}});
+      env:{...process.env,...runtime.env,CI:'true',HUSKY:'0'}});
   }catch(cause){
     throw Object.assign(error(PKG.BUILD_FAILED,`生命周期 ${hook} 失败；可复用有效批准重试`),{diagnostic:Number.isInteger(cause.status)?`EXIT_${cause.status}`:'PROCESS_START_FAILED'});
   }
