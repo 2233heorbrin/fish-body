@@ -1,4 +1,5 @@
 import { packageManagerCommand, nativeNode } from './runtime-programs.mjs';
+import { extract as extractTar } from 'tar';
 /** Approved source -> stomach dependency/build workspace -> immutable runnable tarball.
  * Source, resolved dependencies, tarball and installed files have separate identities.
  * Native DSH remains the only Profile installer. No candidate module is imported here.
@@ -205,8 +206,12 @@ export function authorizeDependencyScripts(rows,authorization) {
   if(pending.length)throw error(PKG.SCRIPT_UNAPPROVED,'依赖生命周期脚本需要新增授权（name/version/treeHash/scripts）',pending);
   return rows;
 }
-function tar(args,cwd) {return execFileSync('tar',args,{cwd,stdio:['ignore','pipe','pipe'],windowsHide:true});}
-function unpack(tgzPath,dest) {mkdirSync(dest,{recursive:true});tar(['-xzf',relative(dest,tgzPath).replace(/\\/g,'/')],dest);return join(dest,'package');}
+function unpack(tgzPath,dest) {
+  mkdirSync(dest,{recursive:true});
+  // Decode npm/pnpm UTF-8 paths in Node, independent of Windows' system tar.
+  extractTar({file:resolve(tgzPath),cwd:dest,sync:true,strict:true});
+  return join(dest,'package');
+}
 
 export function buildInstallPackage({artifactDir,outDir,packageName,version,revision,workRoot=null,
   approvedScopes={},authorization={},production=false,runner=null,published=false,reviewPrepared=null,registryUrl=null}) {

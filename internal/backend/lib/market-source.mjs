@@ -1,4 +1,5 @@
 import { npmCommand } from './runtime-programs.mjs';
+import { list as listTar, extract as extractTar } from 'tar';
 // npm input is the actual published tarball, not a GitHub approximation.
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
@@ -21,13 +22,14 @@ export function ingestNpmPublished(orchestrator,record,{pack=null}={}) {
   const row=rows[0],tgz=join(download,basename(row.filename));
   const bytes=readFileSync(tgz), integrity=sri512(bytes);
   if(row.integrity!==integrity) throw marketError('FH_NPM_INTEGRITY_MISMATCH','发布包完整性不符');
-  const entries=execFileSync('tar',['-tzf',tgz],{encoding:'utf8',windowsHide:true}).trim().split(/\r?\n/);
-  if(entries.some(p=>!p.startsWith('package/')||p.split(/[\\/]/).includes('..')||p.includes('\\')))
+  const entries=[];
+  // tar normalizes Windows separators on ReadEntry; validate the original path.
+  listTar({file:tgz,sync:true,strict:true,onReadEntry:entry=>entries.push({path:entry.header.path,type:entry.type})});
+  if(entries.some(({path:p})=>!p.startsWith('package/')||p.split(/[\\/]/).includes('..')||p.includes('\\')))
     throw marketError('FH_NPM_ARCHIVE_INVALID','发布包路径不符合 npm 包布局');
-  const verbose=execFileSync('tar',['-tvzf',tgz],{encoding:'utf8',windowsHide:true});
-  if(verbose.split(/\r?\n/).some(p=>/^[lh]/.test(p))) throw marketError('FH_NPM_ARCHIVE_INVALID','发布包含不能安全采集的链接');
+  if(entries.some(({type})=>type==='Link'||type==='SymbolicLink')) throw marketError('FH_NPM_ARCHIVE_INVALID','发布包含不能安全采集的链接');
   const unpack=join(download,'unpacked');mkdirSync(unpack,{recursive:true});
-  execFileSync('tar',['-xzf',tgz,'-C',unpack],{windowsHide:true});
+  extractTar({file:tgz,cwd:unpack,sync:true,strict:true});
   const warehouse=join(unpack,'package'), pkg=JSON.parse(readFileSync(join(warehouse,'package.json'),'utf8'));
   if(pkg.name!==record.packageName || (record.requestedVersion && pkg.version!==record.requestedVersion))
     throw marketError('FH_PACKAGE_IDENTITY_MISMATCH',`发布包期望 ${record.packageName}@${record.requestedVersion??'所选目标'}，实际 ${pkg.name}@${pkg.version}`);
