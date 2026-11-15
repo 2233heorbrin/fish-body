@@ -8,7 +8,7 @@ window.__ModuleLoader__.load({
     const React = require('react')
     let FishDataPanel
 // BEGIN SHARED DATA CLIENT
-// Embedded in the two native client entries by tools/sync-client.mjs.
+// Embedded in this package's native client entry by tools/sync-client.mjs.
 function installDataClient(React, ctx, component) {
   const h = React.createElement, base = '/api/fish-' + component + '/data'
   const current = () => {
@@ -23,14 +23,18 @@ function installDataClient(React, ctx, component) {
     return data
   }
   let attempted = null, busy = false, stopped = false
+  const listeners = new Set()
+  const notify = (value, error) => {
+    if (!stopped && component === 'body') for (const listener of listeners) listener(value, error)
+  }
   const initialize = async () => {
     const sessionId = current()
     if (busy || !sessionId || attempted === sessionId || stopped) return
     busy = true; attempted = sessionId
     try {
       const value = await request()
-      if (!stopped && !value.root && value.status === 'pending-workspace') await request({ action: 'initialize', sessionId })
-    } catch { /* The settings panel displays the actual failure and offers retry. */ }
+      if (!stopped && !value.root && value.status === 'pending-workspace') notify(await request({ action: 'initialize', sessionId }))
+    } catch (error) { notify(null, error) }
     finally { busy = false }
   }
   const unsubscribe = ctx.sessions.list.subscribe(initialize)
@@ -38,7 +42,17 @@ function installDataClient(React, ctx, component) {
   ctx.effect(() => () => { stopped = true; unsubscribe() })
   return function FishDataPanel({ onState } = {}) {
     const [value, setValue] = React.useState(null), [error, setError] = React.useState(''), [pending, setPending] = React.useState(false)
+    const [expanded, setExpanded] = React.useState(false)
+    React.useEffect(() => {
+      if (component === 'body' && (error || (value && value.status !== 'ready'))) setExpanded(true)
+    }, [value?.status, error])
     const commit = result => { setValue(result); onState?.(result) }
+    React.useEffect(() => {
+      if (component !== 'body') return
+      const update = (value, error) => { if (error) setError(error.message); else { setError(''); commit(value) } }
+      listeners.add(update)
+      return () => listeners.delete(update)
+    }, [])
     React.useEffect(() => { let live = true; request().then(value => { if (live) commit(value) }).catch(error => { if (live) setError(error.message) }); return () => { live = false } }, [])
     const run = async operation => {
       setPending(true); setError('')
@@ -60,6 +74,32 @@ function installDataClient(React, ctx, component) {
     })
     const labels = { ready: '初始化完成', 'pending-workspace': '待选择工作区', 'invalid-root': '原目录失效，请选择新位置',
       'pending-initialization': '待补齐目录', 'invalid-config': '配置无效' }
+    if (component === 'body') {
+      const preparation = value?.dependencies
+      const preparationLabels = { ready: '程序准备已完成', 'not-prepared': '程序尚未准备',
+        'host-blocked': '宿主暂不支持完整安装接管', 'restart-required': '新位置已保存，请重新加载身体后使用' }
+      const detail = error || value?.error || preparation?.error
+      const failed = Boolean(error || value?.error || preparation?.status === 'failed')
+      const retry = () => run(() => request({ action: 'retry' }))
+      return h('section', { 'aria-label': '数据设置', className: 'fb-data' },
+        failed ? h('div', { className: 'fb-data-issue' },
+          h('p', { className: 'fb-error', role: 'alert' }, error || value?.error ? '数据操作失败，请重试。' : '程序准备失败，请重试。'),
+          h('button', { type: 'button', className: 'fb-tab', disabled: pending, onClick: retry }, pending ? '正在准备…' : '重试准备'))
+          : preparation ? h('p', { className: 'fb-note', role: 'status' }, preparationLabels[preparation.status] || '程序准备：' + preparation.status) : null,
+        detail ? h('details', { className: 'fb-data-error' },
+          h('summary', null, '查看原始错误'), h('pre', null, detail)) : null,
+        h('details', { className: 'fb-data-settings', open: expanded, onToggle: event => setExpanded(event.currentTarget.open) },
+          h('summary', null, '数据设置', h('span', { className: 'fb-data-status', role: 'status' },
+            value ? value.status === 'ready' ? '数据目录已绑定' : labels[value.status] || value.status : '正在读取配置…')),
+          h('div', { className: 'fb-data-content' },
+            value?.root ? h('p', null, '数据根目录：', value.root) : null,
+            value?.profileDir ? h('p', null, 'Profile：', value.profileDir) : null,
+            h('p', { className: 'fb-note' }, '切换位置只更新绑定，不会搬迁旧数据。程序依赖单独准备。'),
+            h('div', { className: 'fb-data-actions' },
+              h('button', { type: 'button', className: 'fb-tab', disabled: pending, onClick: select }, value?.root ? '切换数据位置' : '选择文件夹'),
+              h('button', { type: 'button', className: 'fb-tab', disabled: pending, onClick: () => run(() => request({ action: 'initialize', sessionId: current() })) }, '使用当前对话工作区'),
+              !failed ? h('button', { type: 'button', className: 'fb-tab', disabled: pending, onClick: retry }, pending ? '正在准备…' : '重试准备') : null))))
+    }
     return h('section', { 'aria-label': '数据与依赖', style: { marginBlock: '16px', overflowWrap: 'anywhere' } },
       h('h3', null, '数据与依赖'),
       h('p', { role: 'status' }, value ? labels[value.status] || value.status : '正在读取配置…'),
@@ -108,6 +148,19 @@ function installDataClient(React, ctx, component) {
 .fb-error{margin:12px 0 0;font-size:12.5px;color:var(--dsw-alias-label-error, #c0392b);word-break:break-all}
 .fb-error-path{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
 .fb-note{margin:0;font-size:13px;color:var(--dsw-alias-label-secondary, #5b6570)}
+.fb-data{margin:16px 0 20px;overflow-wrap:anywhere}
+.fb-data-settings{margin-top:12px;padding:12px 0;border-top:1px solid var(--dsw-alias-border-l1, #e2e6ea)}
+.fb-data summary{cursor:pointer;font-size:13px;font-weight:600}
+.fb-data summary:focus-visible{outline:2px solid var(--dsw-alias-brand-primary, #2f6feb);outline-offset:2px}
+.fb-data-status{margin-left:12px;font-weight:400;color:var(--dsw-alias-label-secondary, #5b6570)}
+.fb-data-content{padding-top:8px}
+.fb-data-content p{margin:8px 0;font-size:13px}
+.fb-data-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.fb-data-issue{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.fb-data-issue .fb-error{margin:0}
+.fb-data-error{margin-top:8px}
+.fb-data-error pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.fb-data button:disabled{opacity:.6;cursor:default}
 .fb-retry{margin-top:10px}
 .fb-icon{flex:0 0 auto;display:block}
 `
@@ -310,7 +363,7 @@ function installDataClient(React, ctx, component) {
     }
 
     return {
-      inject: ['slots', 'sessions', 'remote.directoryPicker'],
+      inject: ['slots', 'sessions', 'remote', 'remote.directoryPicker'],
       apply(ctx) {
         FishDataPanel = installDataClient(React, ctx, 'body')
         ctx.slots.inject('settings.section', () => ctx.slots.register({
