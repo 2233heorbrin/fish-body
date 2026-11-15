@@ -1,6 +1,16 @@
 # 本机补丁与正式源码对应关系
 
-2026-11-15，本地维护版本 0.0.3。先前 `fix/install-chain` 已形成当前基线；`fix/prepare-process-stability` 完成准备进程修复及指定扩展宿主的隔离验收，本次仅作本地提交与合并收尾，不推送、打发布标签或更新生产宿主。
+## Windows 默认 pnpm 补修（已复审，本地收尾）
+
+`fix/windows-pnpm-command` 在既有 main 基线上维护 `runtime-programs.mjs` 和 `w6-package.mjs`，不覆盖宿主扩展。原生宿主的 `{command:'pnpm'}` 在 Windows 不能直接交给 Node execFileSync；统一命令描述现在按配置环境的 PATH 选择 pnpm，将标准 npm 全局 / 包内 `.bin` shim 对应的 pnpm 包声明解析为 exe 或 JS bin。JS bin 复用严格 Node 选择，直接 exe 与显式 Node/DSH + JS、参数顺序和环境保持原配置。未配置时保留随包 pnpm 后备；不存在或未知布局的显式配置不后备。没有承诺支持任意自定义 shell 脚本。
+
+已验收 tgz 的独立安装副本通过专项 13 项与受影响检查 54 项，均无失败或跳过。默认配置的普通 Node 和 DSH Node 模式真实安装链通过，后者保留 perf/compat import、worker-events require 和 fork 继承；显式 JS / exe 作正常对照。专项回归还覆盖配置环境、常见 shim 布局、无效显式配置、原始错误脱敏及准备 IPC 到最终事务结果。下方 74 项及宿主验收数量保留为此前阶段证据，不累计到本轮。
+
+2026-11-15，修复已通过复审并完成本地提交与 main fast-forward 合并，保留 `fix/windows-pnpm-command` 分支，版本仍为 0.0.3。收尾仅调整说明，运行代码、测试逻辑、依赖及打包规则不变；最终候选包核对提交树与已验收包的文件字节，复用上述安装与测试证据，不宣称说明调整后的 tgz 重新完成整套安装实测。本轮未推送、未创建发布标签、未发布、未接入日常；宿主扩展仍独立维护，未知 shim 不作兼容承诺。
+
+## 既有准备进程修复
+
+2026-11-15，本地维护版本 0.0.3。先前 `fix/install-chain` 已形成当前基线；`fix/prepare-process-stability` 完成准备进程修复及指定扩展宿主的隔离验收，该工作块已作本地提交与合并收尾，未推送、打发布标签或更新生产宿主。
 
 | 本机补丁 | 身体源码的现有维护入口 | 本轮处理 |
 |---|---|---|

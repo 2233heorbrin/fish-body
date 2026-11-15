@@ -139,18 +139,6 @@ function orderedRecompute(root,expected) {
   if(!Array.isArray(expected)||actual.length!==expected.length) throw error(PKG.UNPACK_MISMATCH,'源码清单不一致');
   return expected.map(f=>{const a=map.get(f.path);if(!a||a.bytes!==f.bytes||a.sha256!==f.sha256)throw error(PKG.UNPACK_MISMATCH,'源码已改变');return a;});
 }
-export function pnpmBinary() {
-  // Resolve the installed manager, never download a new one.
-  if(process.platform==='win32') {
-    const out=execFileSync('where.exe',['pnpm'],{encoding:'utf8'}).trim().split(/\r?\n/);
-    const shim=out.find(p=>/pnpm\.(cmd|exe)$/i.test(p));
-    if(shim?.endsWith('.exe'))return shim;
-    const exe=shim&&join(dirname(shim),'node_modules','pnpm','pnpm.exe');
-    if(exe&&existsSync(exe))return exe;
-    throw error(PKG.BUILD_FAILED,'无法定位已安装的 pnpm executable');
-  }
-  return 'pnpm';
-}
 function redactOutput(value) {
   return String(value??'')
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi,'$1[redacted]@')
@@ -160,12 +148,20 @@ function redactOutput(value) {
 }
 export function runPnpm(args,cwd,runner) {
   if(runner) return runner(args,cwd);
-  try {const manager=packageManagerCommand();return execFileSync(manager.command,[...manager.args,...args],{cwd,stdio:['ignore','pipe','pipe'],maxBuffer:32*1024*1024,windowsHide:true,
-    env:{...process.env,...manager.env,CI:'true',HUSKY:'0'}}).toString();}
+  let manager,phase='command-resolution';
+  try {
+    manager=packageManagerCommand();phase='execution';
+    const result=execFileSync(manager.command,[...manager.args,...args],{cwd,stdio:['ignore','pipe','pipe'],maxBuffer:32*1024*1024,windowsHide:true,
+      env:{...manager.env,CI:'true',HUSKY:'0'}});
+    phase='result-processing';return result.toString();
+  }
   catch (cause) {
     const stdout=redactOutput(cause?.stdout).slice(0,12000),stderr=redactOutput(cause?.stderr).slice(0,12000);
     const raw=[stderr,stdout].join('\n').replace(/(https?:\/\/)\s*\r?\n\s*/g,'$1');
-    const diagnostic=raw.match(/ERR_PNPM_[A-Z0-9_]+/)?.[0]??(Number.isInteger(cause?.status)?`EXIT_${cause.status}`:'PROCESS_START_FAILED');
+    // spawnSync also reports timeouts/buffer failures after starting a process.
+    const creationFailure=['ENOENT','EACCES','ENOEXEC','ENOTDIR','EPERM','EINVAL'].includes(cause?.code)&&/^spawn(?:Sync)?\b/.test(cause?.syscall??'');
+    const failurePhase=phase==='execution'?(Number.isInteger(cause?.status)?'process-exit':creationFailure?'process-creation':'execution'):phase;
+    const diagnostic=raw.match(/ERR_PNPM_[A-Z0-9_]+/)?.[0]??(Number.isInteger(cause?.status)?`EXIT_${cause.status}`:cause?.code??(failurePhase==='process-creation'?'PROCESS_START_FAILED':failurePhase==='result-processing'?'RESULT_PROCESSING_FAILED':'PNPM_CALL_FAILED'));
     const wrappedUrl=raw.match(/(?:GET|POST)\s+(https?:\/\/[\s\S]*?)(?=:\s*(?:Not Found|Forbidden|Unauthorized)|\s+-\s*\d{3})/i)?.[1];
     const requestUrl=wrappedUrl?.replace(/\s+/g,'')??raw.match(/(?:GET|POST)\s+(https?:\/\/[^\s]+)/)?.[1]?.replace(/:$/,'')??null;
     let packageName=null;
@@ -174,10 +170,12 @@ export function runPnpm(args,cwd,runner) {
       packageName=path.match(/(@[^/]+\/[^/]+|[^/]+)$/)?.[1]??null;
     }catch{}
     const stage=args[0]==='pack'?'package':'dependency-preparation';
-    const pnpmFailure={stage,command:['pnpm',...args.map(redactOutput)],exitCode:cause.status??null,
-      code:diagnostic,packageName,requestUrl,stdout,stderr};
+    const pnpmFailure={stage,phase:failurePhase,command:[manager?.command??'pnpm',...(manager?.args??[]),...args].map(redactOutput),exitCode:cause.status??null,
+      code:diagnostic,causeName:cause?.name??null,causeCode:cause?.code??null,causeMessage:redactOutput(cause?.message??cause).slice(0,12000),
+      syscall:redactOutput(cause?.syscall)||null,path:redactOutput(cause?.path)||null,signal:cause?.signal??null,
+      packageName,requestUrl,stdout,stderr};
     const label=stage==='package'?'安装包打包失败':'依赖准备失败';
-    throw Object.assign(error(PKG.BUILD_FAILED,`${label}：${diagnostic}${packageName?'，'+packageName:''}${requestUrl?'\n'+requestUrl:''}；可复用有效批准重试`),{diagnostic,pnpmFailure});
+    throw Object.assign(error(PKG.BUILD_FAILED,`${label}：${diagnostic} (${failurePhase})；${pnpmFailure.causeMessage}${packageName?'，'+packageName:''}${requestUrl?'\n'+requestUrl:''}；可复用有效批准重试`),{diagnostic,pnpmFailure});
   }
 }
 function runHook(hook,script,cwd,root,runner) {

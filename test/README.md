@@ -11,6 +11,10 @@ backend-prepare-process.test.mjs 的环境配置：
 
 示例命令：node --test test/backend-prepare-process.test.mjs。
 
+`backend-package-manager.test.mjs` 同样加载独立安装产物，覆盖 Windows 默认 pnpm、标准全局和 `.bin` 布局、配置 PATH/env 与参数、显式 exe / JS、无效配置及诊断分类；真实准备 IPC 用例核对最终 adapter 失败结果。Windows 夹具不执行自定义 shim 内容。真实 DSH + pnpm JS 项沿用 `FISH_TEST_DSH_EXEC_PATH`，未提供时明确 skip；其余普通必需回归照常执行。
+
+完整默认配置宿主验收须另走真实 `pluginManager/installBundle`、准备 pack、原生部署和 Loader；单项命令解析或 `--version` 成功不代表该链已通过。桌面 Node 模式验收保留实际 perf/compat imports 与 worker-events require，不加载日常 instance-link。
+
 测试启动的 DSH 进程使用 ELECTRON_RUN_AS_NODE=1，验证运行时、准备入口和生命周期；这不代表完整 DSH 宿主安装事务接入通过。Electron 模式缓存用例用受控探针错误模拟启动模式要求，避免启动桌面 GUI，真实运行路径由配置了 DSH 的集成项覆盖。
 
 运行前把 TEMP/TMP/TMPDIR、HOME/USERPROFILE、APPDATA/LOCALAPPDATA、DSH_HOME/DSH_AGENTS_HOME、npm cache、pnpm home/store 及 FISH_HAND_STATE 指向隔离根；仅改变 cwd 不满足隔离要求。测试不负责安装缺失依赖，也不应使用生产状态配置。
