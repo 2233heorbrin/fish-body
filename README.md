@@ -1,24 +1,30 @@
 # fish-body（鱼的身体）
 
-> 当前任务分支实现运行／数据绑定解耦及两阶段安装决定，尚未发布或部署。整个鱼脑仍为一个插件；双方不要求另一方存在、开启或先完成初始化。同宿主退出仍影响双方，不提供进程隔离。显式继续入口依赖单独维护的实验宿主扩展 v2，不随身体包安装。
+> 0.0.4 提供独立数据绑定、两阶段安装决定和精简后的设置页。身体与鱼脑各自启停，不要求另一方存在、开启或先完成初始化。同宿主退出仍影响双方，不提供进程隔离。显式继续入口依赖单独维护的实验宿主扩展 v2，不随身体包安装。
 
 一个 DSH bundle，包含饭（固定上游材料）→胃（审查、依赖准备、构建）→手（受管包、决定、部署和恢复）的现有完整后端、设置页及内置 SHA-256。无需另找未发布的 fish-hand 后端。
 
-**官方原版仍无安装事务扩展；配套扩展为隔离验证原型。** 根入口识别宿主明确导出的 `installTransactionExtensionVersion=1|2`；本分支的待决定／原包／原生继续流程要求 v2。官方 rc.5 继续显示 `FISH_NATIVE_INSTALL_INTERCEPT_UNAVAILABLE`。扩展宿主按已选择 bundle 的 `dsh.installTransaction` 元数据调用后端，最终仍由原生执行器安装，保留兼容性、脚本策略、失败和恢复语义。插件不会自行修改宿主。
+**官方原版仍无安装事务扩展。** 根入口识别宿主明确导出的 `installTransactionExtensionVersion=1|2`；本版本的待决定／原包／原生继续流程要求 v2。官方 rc.5 继续显示 `FISH_NATIVE_INSTALL_INTERCEPT_UNAVAILABLE`。扩展宿主按已选择 bundle 的 `dsh.installTransaction` 元数据调用后端，最终仍由原生执行器安装，保留兼容性、脚本策略、失败和恢复语义。插件不会自行修改宿主。
 
 ## 安装入口与运行要求
 
-需要 DSH 和 Node `>=22.14`。已验证官方 `0.2.1-rc.5` 的插件生命周期、后端挂载与资源释放；完整安装接管已在同版本的指定实验扩展宿主中隔离验证，不外推为官方原版兼容。
+需要 Node `>=22.14`。已验证 Windows、DSH `0.2.1-rc.5` 及指定扩展环境的生命周期、后端挂载与资源释放；完整安装接管的证据属于扩展环境，不外推为官方原版兼容。其他宿主版本、macOS 和 Linux 未验证。
 
-当前版本为 `0.0.3`，通过 [GitHub 仓库 2233heorbrin/fish-body](https://github.com/2233heorbrin/fish-body) 的 main 与 annotated tag `v0.0.3` 交付源码。固定版本安装来源为：
+当前版本为 `0.0.4`，通过 [GitHub 仓库 2233heorbrin/fish-body](https://github.com/2233heorbrin/fish-body) 的 main 与 annotated tag `v0.0.4` 交付源码。固定版本安装来源为：
 
 ```text
-github:2233heorbrin/fish-body#v0.0.3
+github:2233heorbrin/fish-body#v0.0.4
 ```
 
-将该来源交给 DSH 原生插件管理。开发者也可在仓库根执行 `npm pack --ignore-scripts`，把生成的 `fish-body-0.0.3.tgz` 作为 `file:<绝对 tgz 路径>` 使用。启停以原生插件选择为准，不增加第二个总开关。完整安装接管需要上述指定 rc.5 实验宿主扩展，该扩展不随身体包静默安装；“换用线上版本”另需市场可选接口支持。
+将该来源交给 DSH 原生插件管理。开发者也可在仓库根执行 `npm pack --ignore-scripts`，把生成的 `fish-body-0.0.4.tgz` 作为 `file:<绝对 tgz 路径>` 使用。启停以原生插件选择为准，不增加第二个总开关。完整安装接管需要指定 rc.5 实验宿主扩展，该扩展不随身体包静默安装；“换用线上版本”另需市场可选接口支持。
 
-**源码版本交付不等于远端安装或更新已验收。** 0.0.3 的 GitHub 首次安装、从旧版更新及插件页发现更新仍待隔离验证；本版本未创建 GitHub Release、未发布 npm/其他 registry，也未升级日常环境。
+公开候选已在指定扩展环境验证 GitHub 首次安装、旧版更新和原生加载；远端任务分支随后在日常完成独立开关及资源检查，用户确认页面、目录按钮和身体关闭后的工具停用。正式版本在这些已验收运行内容上整理版本与说明，不能把既有测试写成最终版本重新跑过整套测试。插件页自动发现更新尚未验证，原生指定标签安装不能代替它；未创建 GitHub Release，未发布 npm/其他 registry。
+
+### 扩展交付限制
+
+两阶段决定需要 manager v2（`installTransactionExtensionVersion=2`、原生 `install-decision` 入口和对应结果/恢复契约）；鱼脑另需 `agentLoop.releaseExact`。市场 client-only 资源占位的唯一挂载修复也是独立兼容补丁，不属于身体包，也不保证任意市场版本都需要同一补丁。
+
+这些扩展目前没有公开可下载的配套补丁发行物。本仓库不会静默安装它们，完整流程只支持环境维护者已经按实际宿主基线部署并核验的指定 rc.5 环境。其他用户应先向环境维护者取得独立维护、带来源/许可证/应用和恢复说明的匹配扩展；缺少这些材料时不能按官方原版全功能即装即用操作。这里不提供虚构下载地址或作者机器路径作为安装步骤。
 
 ## 首次初始化与数据
 
@@ -76,7 +82,7 @@ dsh plugin --profile <p> install-decision <决定引用> cancel <目标编号>
 
 扩展宿主仅在身体 bundle 已选择时调用事务入口；关闭后原生安装不读取身体注册表、不产生身体审计。普通启用、停用不经过安装事务。既有独立插件不随身体卸载。官方原版和扩展版的验收必须分别报告。
 
-普通 Node 与实际 DSH.exe 的 Node 模式已完成真实 CLI 故障、解除故障后的安装和 Loader 验证；默认 pnpm 在保留实际 perf/compat imports、worker-events require 的隔离宿主中也完成安装及 Loader 验证。桌面外壳完整环境交接仍未验证。历史生产 EPIPE 的精确触发路径仍为 unknown，生产尚未采用本次修复。实现归属与验收范围见 [PATCHES.md](PATCHES.md)。
+普通 Node 与实际 DSH.exe 的 Node 模式已完成真实 CLI 故障、解除故障后的安装和 Loader 验证；默认 pnpm 在保留实际 perf/compat imports、worker-events require 的隔离宿主中也完成安装及 Loader 验证。日常指定扩展环境的原生安装与重载、独立开关已验证，页面及目录按钮由用户确认；完整第三方市场安装链和插件页自动发现更新不因此视为通过。历史 EPIPE 的精确触发路径仍为 unknown。实现归属与验收范围见 [PATCHES.md](PATCHES.md)。
 
 ## 开发验证
 
@@ -86,7 +92,7 @@ dsh plugin --profile <p> install-decision <决定引用> cancel <目标编号>
 node --test test/distribution.test.mjs test/backend-*.test.mjs test/official-native.test.mjs
 ```
 
-包含真实本地产包、依赖生命周期、源码身份、Git/归档替身、本地离线 pnpm 安装与部署校验、多 Profile 状态隔离及原生卸载。网络测试不是 GitHub 在线验收；路由与文件夹打开测试使用最小连接/桌面 opener 接缝，不是完整桌面点击验收。未在生产安装或重启，没有真实市场安装验收。
+包含真实本地产包、依赖生命周期、源码身份、Git/归档替身、本地离线 pnpm 安装与部署校验、多 Profile 状态隔离及原生卸载。测试中的网络替身不是 GitHub 在线验收；路由与文件夹打开的自动化测试使用最小连接/桌面 opener 接缝。实际远端安装及用户页面/目录操作证据单独记录，不能由自动化接缝推定；完整第三方市场安装链仍未验收。
 
 历史 W6-A 本机隔离辅助函数 `internal/backend/lib/w6-runner.mjs` 的 `makeRunPnpm()` / `runnerFact()` 保留旧验收机器的宿主定位，仅供对应历史本机测试，不是跨机器安装入口；正式插件安装链不调用这两个函数。不能据此宣称这些旧辅助入口可在其他机器通用运行。当前安装产物回归按 [test/README.md](test/README.md) 使用明确的隔离根和可配置工具路径。
 
