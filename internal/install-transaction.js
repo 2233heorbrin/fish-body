@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { ProfileData } from './profile-data.js'
+import { bodyProfileData } from './body-data.js'
 import { configureBackend } from './backend-entry.js'
 import { withStateConfig, loadProductionState } from './backend/production-state.mjs'
 import { createMarketBodyAdapter, prepareInChild, restorePreparedRegistration } from './backend/lib/market-runtime.mjs'
@@ -12,12 +12,13 @@ import { classifyPnpmArgs, parseInstallSpecs, nativeOfficialSpecs } from './back
  */
 export function createInstallTransaction(context) {
   const profileDir = context.dir
-  const data = new ProfileData(profileDir, 'body')
+  const data = bodyProfileData(context)
+  if (data.state().status === 'pending-initialization') data.initialize()
   const state = data.state()
   if (state.status !== 'ready') return { run: async ({ args }) => {
     const op = classifyPnpmArgs(args).op
     if (!['install', 'update', 'repair'].includes(op)) return null
-    return { exitCode: 1, stderr: 'FISH_DATA_NOT_READY: 请先在鱼的身体页面选择工作区并初始化。', wroteNothing: true }
+    return { exitCode: 1, stderr: 'FISH_DATA_NOT_READY: ' + (state.error || '请先在鱼的身体页面选择工作区并初始化。'), wroteNothing: true }
   } }
   const configPath = configureBackend(state, context)
   const prepare = (input, controls) => {
@@ -50,6 +51,13 @@ export function createInstallTransaction(context) {
       return { ok: true, restoredRegistrations: completed.map(row => row.packageName) }
     }),
     run: input => withStateConfig(configPath, async () => {
+      const current = data.state()
+      if (current.status !== 'ready') return {
+        exitCode: 1, stderr: 'FISH_DATA_NOT_READY: ' + (current.error || current.status), wroteNothing: true,
+      }
+      if (current.root !== state.root) return {
+        exitCode: 1, stderr: 'FH_ROOT_RELOAD_REQUIRED: 数据位置已切换；请重新加载身体。', wroteNothing: true,
+      }
       if (nativeOfficialSpecs(input.args)) return null
       const op = classifyPnpmArgs(input.args).op
       const { specs, subcommand } = parseInstallSpecs(input.args)

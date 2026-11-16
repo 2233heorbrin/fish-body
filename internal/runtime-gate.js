@@ -14,5 +14,8 @@ export async function activateRuntimePlugin(ctx) {
   if (hash !== '7238d6fd21b5a98c78fbef91ca05940add5cf371fe28e4774663d59da93eeda9') throw new Error('FH_GATE_CONTENT_HASH')
   const mod = await import(pathToFileURL(entry).href)
   if (mod.PLUGIN_ID !== 'utility.sha256' || mod.PLUGIN_VERSION !== '1.0.0' || mod.TOOL_NAME !== 'utility_sha256') throw new Error('FH_GATE_MODULE_INTERFACE')
+  // Native unload can finish while the asynchronous integrity reads settle.
+  // An obsolete owner must not register a tool on its disposed context.
+  if (ctx.fiber && (ctx.fiber.uid === null || ctx.fiber.state === 5)) return () => {}
   return mod.apply(ctx)
 }

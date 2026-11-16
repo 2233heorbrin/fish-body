@@ -4,7 +4,8 @@
  */
 
 import { stat } from 'node:fs/promises'
-import { ProfileData, mountProfileData } from './internal/profile-data.js'
+import { mountProfileData } from './internal/profile-data.js'
+import { bodyProfileData } from './internal/body-data.js'
 import * as localSwitch from './internal/backend/lib/body-switch.mjs'
 import { prepareBackend } from './internal/backend-entry.js'
 import { spawn } from 'node:child_process'
@@ -14,7 +15,7 @@ export const name = 'fish-body'
 export const inject = ['connection', 'sessionController']
 
 /* 唯一一份映射：id → 标题 / 说明 / 真实目录。对象键顺序即设置页分段顺序。 */
-/* Root comes from the shared Profile binding; fishRoot is an existing-user input. */
+/* Root comes from the body's Profile binding; fishRoot is an upgrade input. */
 const DEFAULT_FISH_ROOT = ''
 /* 分区 id → 目录名。根目录变化时直接拼接，避免"替换基准变了但原路径没变"的错。 */
 const SECTION_FOLDERS = Object.freeze({ rice: '饭', hand: '鱼的手', stomach: '鱼的胃' })
@@ -191,7 +192,7 @@ export async function apply(ctx, config = {}) {
   // Native disposal joins exactly this Profile's admitted body operations.
   ctx.effect(() => () => localSwitch.runBodySwitchChange({ profileDir: hints.profileDir, enabled: false, operation: async () => {} }))
   const profileDir = config.profileDir || ctx.get?.('profileContext')?.dir
-  const data = new ProfileData(profileDir, 'body', { legacyRoot: config.fishRoot })
+  const data = bodyProfileData({ ...ctx.get?.('profileContext'), dir: profileDir }, config)
   let backend = null
   await mountProfileData(ctx, data, { prepare: async state => {
     if (backend && backend.root !== state.root) return { status: 'restart-required', error: '新位置已保存；当前流程收尾后请重新加载身体。旧数据未搬迁。' }

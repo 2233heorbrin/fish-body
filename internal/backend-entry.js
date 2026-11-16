@@ -7,6 +7,7 @@ import { npmCommand, packageManagerCommand } from './backend/lib/runtime-program
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { createInstallTransaction } from './install-transaction.js'
+import { BINDING_FILE } from './profile-data.js'
 
 /** Full existing backend, scoped to this Profile. No process-global environment mutation. */
 export function configureBackend(state, { packageManager = null, installAnchor = null } = {}) {
@@ -31,7 +32,7 @@ export function prepareBackend(ctx, state) {
   const configPath = configureBackend(state, ctx.profileContext)
   const plugin = { name: 'fish-body-backend', inject: ['connection'], apply(child) {
     mountApproval(child, { frameworkRoot: state.root, profileDir, stateConfigPath: configPath,
-      dataBindingPath: join(profileDir, 'fish-data.json') })
+      dataBindingPath: join(profileDir, BINDING_FILE) })
   } }
   const handle = ctx.plugin(plugin)
   const adapter = withStateConfig(configPath, () => createMarketBodyAdapter({ profileDir }))

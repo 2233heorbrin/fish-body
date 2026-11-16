@@ -2,6 +2,8 @@
 
 测试实现从 FISH_TEST_INSTALL_ROOT/node_modules/fish-body 加载；先打包并在独立目录安装，不能将变量指向源码根代替安装产物。
 
+独立数据绑定专项：`node --test test/distribution.test.mjs test/independent-binding.test.mjs test/binding-consumers.test.mjs`。消费者测试还需 `FISH_DSH_TEST_ANCHOR` 指向隔离 rc.5 宿主；验证原生组合中的旧 fishRoot、旧后端投影、独立绑定优先级、切根和失效后的旧事务拒绝，以及原完整性校验后已卸载 SHA 所属实例不再注册工具。
+
 backend-prepare-process.test.mjs 的环境配置：
 
 - FISH_TEST_INSTALL_ROOT：必需，独立安装根。
