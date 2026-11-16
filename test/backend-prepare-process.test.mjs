@@ -7,7 +7,7 @@ import { EventEmitter, once } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 const install=process.env.FISH_TEST_INSTALL_ROOT;
@@ -28,7 +28,7 @@ function script(name,body) {const value=join(directory('scripts'),name);writeFil
 // already provisioned manager when optional native pnpm packages are absent.
 const testManager=process.env.FISH_TEST_PNPM
   ?{command:resolve(process.env.FISH_TEST_PNPM),args:[]}
-  :{command:process.execPath,args:[createRequire(join(packageRoot,'package.json')).resolve('pnpm/bin/pnpm.mjs')]};
+  :{command:process.execPath,args:[createRequire(realpathSync(join(packageRoot,'package.json'))).resolve('pnpm/bin/pnpm.mjs')]};
 // Missing optional desktop integration is a skip; an invalid supplied path fails.
 const dsh=process.env.FISH_TEST_DSH_EXEC_PATH;
 const dshTest={skip:dsh?false:'FISH_TEST_DSH_EXEC_PATH is not configured; desktop integration unknown'};
@@ -210,7 +210,7 @@ test('spawn failure is controlled and preserves the original cause',async()=>{
 
 test('preload failure is reported through stderr and exit status',()=>{
   const preload=script('throw-preload.cjs',"throw new Error('SYNTHETIC_PRELOAD_FAILURE')\n");
-  const result=helperPrepare('preload',profile('preload'),{PREPARE_NODE_OPTIONS:'--require='+preload});
+  const result=helperPrepare('preload',profile('preload'),{PREPARE_NODE_OPTIONS:'--require='+JSON.stringify(preload)});
   assert.equal(result.ok,false);assert.equal(result.error.code,'FH_MARKET_PREPARE_EXIT');assert.notEqual(result.error.exitCode,0);
   assert.match(result.error.stderr,/SYNTHETIC_PRELOAD_FAILURE/);
 });

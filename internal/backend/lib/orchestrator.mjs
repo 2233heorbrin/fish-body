@@ -36,7 +36,7 @@ export function createLayout(root, { sectionIds } = {}) {
  * @param {string[]} [p.sectionIds] 允许显式注入分区键（纯单测用；默认真实读 fish-body）
  */
 export function processRequest({
-  root, repo, pinnedCommit, request, store, sectionIds, dirs = null,
+  root, repo, pinnedCommit, request, store, sectionIds, dirs = null, onCollected = null,
 }) {
   // dirs：允许调用方把 rice / stomach 指到 canonical 分区根（饭 / 鱼的胃/来源审查）；
   // 不传时保持原行为（root/rice、root/stomach），既有回归不受影响。
@@ -85,6 +85,9 @@ export function processRequest({
     // riceResult.status === 'already-present' 时沿用已有饭目录材料，
     // 不覆盖、不追加状态迁移；只继续生成/复用胃材料。
 
+    // Preserve the acquired original before analysis; failure here is not a
+    // download fallback. The native caller may later offer an explicit choice.
+    onCollected?.(riceResult);
     // ---------- W3 胃材料生成 ----------
     reviewDoc = buildReview({
       riceDir: riceResult.riceDir,

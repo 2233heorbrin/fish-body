@@ -32,7 +32,7 @@ function confFor(profileDir) {assertProfileAllowed(profileDir);return loadProduc
 function registryOf(conf) {const doc=JSON.parse(readFileSync(conf.registryPath,'utf8'));if(!Array.isArray(doc.plugins))doc.plugins=Object.values(doc.plugins??{});return doc;}
 function allVersions(doc) {return doc.plugins.flatMap(r=>[r,...r.previousVersions??[]]);}
 export function restorePreparedRegistration(conf,previous,prepared) {
-  if(!prepared)return;
+  if(!prepared?.spec)return;
   const doc=registryOf(conf),current=doc.plugins.find(r=>r.packageName===prepared.packageName);
   if(current?.spec!==prepared.spec)return;
   const history=allVersions(doc).filter(r=>r.packageName===prepared.packageName&&r.spec!==previous?.spec)
@@ -53,7 +53,7 @@ function prepareProcessError(code,message,cause,details={}) {
   const suffix=cause?.message?': '+cause.message:'';
   return Object.assign(new Error(code+': '+message+suffix),{code,causeCode:cause?.code??null,...details});
 }
-export function prepareInChild(input,{signal,onStage=()=>{},entry=fileURLToPath(new URL('./market-prepare.mjs',import.meta.url)),runtime=null,forkProcess=fork}={}) {
+export function prepareInChild(input,{signal,onStage=()=>{},timeoutMs=null,entry=fileURLToPath(new URL('./market-prepare.mjs',import.meta.url)),runtime=null,forkProcess=fork}={}) {
   signal?.throwIfAborted();
   return new Promise((resolve,reject)=>{
     let selected;
@@ -65,7 +65,8 @@ export function prepareInChild(input,{signal,onStage=()=>{},entry=fileURLToPath(
     let child;
     try {child=forkProcess(entry,[],{execPath:selected.command,stdio:['ignore','ignore','pipe','ipc'],windowsHide:true,env:childEnv});}
     catch(cause) {reject(prepareProcessError('FH_MARKET_PREPARE_START_FAILED','准备进程启动失败',cause,{runtime:selected.command,runtimeSource:selected.source}));return;}
-    let result,resultSeen=false,structuredError=null,stderr='',exitCode=null,exitSignal=null,killer=null,finished=false;
+    let result,resultSeen=false,structuredError=null,stderr='',exitCode=null,exitSignal=null,killer=null,finished=false,fixedOriginal=null,timedOut=false;
+    const timer=timeoutMs>0?setTimeout(()=>{timedOut=true;terminate();},timeoutMs):null;
     const failures=[];
     const recordFailure=(kind,code,cause)=>{if(finished)return;failures.push({kind,code,cause});};
     const terminate=()=>{
@@ -79,6 +80,7 @@ export function prepareInChild(input,{signal,onStage=()=>{},entry=fileURLToPath(
     const cancel=()=>terminate();
     const onStderr=buffer=>{stderr+=buffer.toString();};
     const onMessage=message=>{
+      if(message?.source)fixedOriginal=message.source;
       if(message?.stage)try {onStage(message.stage);} catch(cause) {
         recordFailure('stage','FH_MARKET_PREPARE_STAGE_FAILED',cause);terminate();return;
       }
@@ -88,15 +90,17 @@ export function prepareInChild(input,{signal,onStage=()=>{},entry=fileURLToPath(
     const onError=cause=>recordFailure('process','FH_MARKET_PREPARE_START_FAILED',cause);
     const onExit=(code,childSignal)=>{exitCode=code;exitSignal=childSignal;};
     const cleanup=()=>{
+      clearTimeout(timer);
       signal?.removeEventListener('abort',cancel);
       child.stderr?.off('data',onStderr);child.off('message',onMessage);child.off('error',onError);child.off('exit',onExit);child.off('close',onClose);
     };
     const onClose=async(code,childSignal)=>{
       if(finished)return;finished=true;
       await killer;exitCode=code??exitCode;exitSignal=childSignal??exitSignal;cleanup();
-      const details={runtime:selected.command,runtimeSource:selected.source,exitCode,signal:exitSignal,stderr:redactProcessOutput(stderr),
+      const details={runtime:selected.command,runtimeSource:selected.source,exitCode,signal:exitSignal,stderr:redactProcessOutput(stderr),fixedOriginal,
         processErrors:failures.map(row=>({kind:row.kind,code:row.cause?.code??row.code,message:row.cause?.message??String(row.cause)}))};
       if(signal?.aborted){reject(Object.assign(new Error('准备已取消；未部署，可手动重试'),{name:'AbortError',code:'FH_MARKET_CANCELLED',...details}));return;}
+      if(timedOut){reject(prepareProcessError('FH_MARKET_ANALYSIS_TIMEOUT','准备分析超时；尚未部署',null,details));return;}
       if(resultSeen&&(exitCode!==0||exitSignal)){reject(prepareProcessError('FH_MARKET_PREPARE_EXIT_AFTER_RESULT','准备进程返回结果后异常退出',null,details));return;}
       if(structuredError){reject(Object.assign(structuredError,details));return;}
       if(failures.length){const first=failures[0];reject(prepareProcessError(first.code,first.kind==='ipc'?'准备进程通信失败':'准备进程启动或运行失败',first.cause,details));return;}
@@ -126,6 +130,12 @@ function selectVersion(conf,profileDir,spec) {
   return {packageName:row.packageName,version:row.version,spec:row.spec,requestId:row.requestId};
 }
 function verifyResult(conf,profileDir,prepared) {
+  if(prepared.original) {
+    const installed=JSON.parse(readFileSync(join(profileDir,'node_modules',prepared.packageName,'package.json'),'utf8'));
+    if(installed.name!==prepared.packageName||installed.version!==prepared.version)
+      throw new Error('FH_MARKET_DEPLOY_IDENTITY_MISMATCH: 原包安装身份不符');
+    return {packageName:installed.name,version:installed.version,spec:'file:'+prepared.original.archive};
+  }
   const current=loadProductionState().candidates?.[prepared.packageName];
   const declared=JSON.parse(readFileSync(join(profileDir,'package.json'),'utf8')).dependencies?.[prepared.packageName];
   const installed=JSON.parse(readFileSync(join(profileDir,'node_modules',prepared.packageName,'package.json'),'utf8'));
@@ -166,10 +176,18 @@ export function createMarketBodyAdapter({profileDir,switchBody=null,prepare=prep
             for(const spec of Object.values(deps))if(typeof spec==='string'&&spec.startsWith('file:'))selectVersion(conf,profileDir,spec);
             const plan=await prepare({frameworkRoot:dirname(conf.handRoot),profileDir,repair:true,registryUrl,requestId:'market-'+randomUUID()},{signal,onStage});
             repairPrepared=plan.prepared??[];
-            for(const p of repairPrepared)selectVersion(conf,profileDir,p.spec);
+            if(repairPrepared.some(p=>p.pendingDecision))return {exitCode:2,bodyHandled:true,wroteNothing:true,
+              pendingDecision:{targets:repairPrepared.map(p=>({target:p.original?.requestedSpec??p.spec,
+                original:p.original,analysis:p.analysis,managedSpec:p.original?null:p.spec,
+                choice:p.pendingDecision?null:'install-intent'})),repair:true}};
+            for(const p of repairPrepared)if(!p.original)selectVersion(conf,profileDir,p.spec);
             onStage('原生修复既有依赖，受管插件使用已审安装包');
-            signal?.throwIfAborted();deployed=true;
-            const result=await deploy(plan.prepared?.length?['add',...plan.prepared.map(p=>p.spec)]:args);
+            signal?.throwIfAborted();
+            for(const p of repairPrepared)if(p.original&&!readFileSync(p.original.archive).equals(readFileSync(p.original.baseline)))
+              throw new Error('FH_NPM_INTEGRITY_MISMATCH: 原包内容已改变');
+            deployed=true;
+            const result=await deploy(plan.prepared?.length?['add',...plan.prepared.map(p=>p.original?'file:'+p.original.archive:p.spec),
+              ...args.filter(a=>a.startsWith('--'))]:args);
             if(result.exitCode!==0||result.cancelled||result.timedOut)for(const p of repairPrepared)
               restorePreparedRegistration(conf,repairPrevious.find(r=>r.packageName===p.packageName),p);
             if(result.exitCode===0&&!result.cancelled&&!result.timedOut) {
@@ -199,24 +217,35 @@ export function createMarketBodyAdapter({profileDir,switchBody=null,prepare=prep
             prepared=await prepare({frameworkRoot:dirname(conf.handRoot),profileDir,spec:raw,
               packageName:match?.[1]??null,version:fixed,sourceUrl,registryUrl,requestId:'market-'+randomUUID()}, {signal,onStage});
           }
+          if(prepared.pendingDecision)return {exitCode:2,bodyHandled:true,wroteNothing:true,
+            pendingDecision:{targets:[{target:raw,original:prepared.original,analysis:prepared.analysis}]}};
           previous=beforeRows.find(r=>r.packageName===prepared.packageName)??null;
           signal?.throwIfAborted();
-          selectVersion(conf,profileDir,prepared.spec);
-          // No installation lock has been acquired during preparation. One
-          // original native call owns final locks, snapshots and rollback.
-          deployed=true;
+          if(!prepared.original)selectVersion(conf,profileDir,prepared.spec);
+          // The native caller owns the Profile lock and deployment recovery.
           const commandIndex=args.indexOf(subcommand);
-          const result=await deploy([...args.slice(0,commandIndex),'add',...args.slice(commandIndex+1).filter(a=>a!==raw),prepared.spec]);
+          if(prepared.original&&!readFileSync(prepared.original.archive).equals(readFileSync(prepared.original.baseline)))
+            throw new Error('FH_NPM_INTEGRITY_MISMATCH: 原包内容已改变');
+          deployed=true;
+          const result=await deploy([...args.slice(0,commandIndex),'add',...args.slice(commandIndex+1).filter(a=>a!==raw),
+            prepared.original?'file:'+prepared.original.archive:prepared.spec]);
           if(result.exitCode!==0||result.timedOut||result.cancelled) {
             restorePreparedRegistration(conf,previous,prepared);
             return {...result,bodyHandled:true};
           }
           const managedLocal=verifyResult(conf,profileDir,prepared);
-          return {...result,bodyHandled:true,managedLocal,resolvedNpmVersion:prepared.version};
+          return {...result,bodyHandled:true,...(prepared.original?{originalInstalled:true,analysis:prepared.analysis,
+            authorization:prepared.authorization,fixedSource:prepared.original}:{managedLocal}),resolvedNpmVersion:prepared.version};
         }catch(error) {
           restorePreparedRegistration(conf,previous,prepared);
           for(const p of repairPrepared)restorePreparedRegistration(conf,repairPrevious.find(r=>r.packageName===p.packageName),p);
           const cancelled=signal?.aborted||error.name==='AbortError';
+          if(!cancelled&&!deployed&&error.fixedOriginal&&!/INTEGRITY|ARCHIVE|IDENTITY|CONTENT_(?:DRIFT|MISMATCH)/.test(error.code??''))return {exitCode:2,bodyHandled:true,wroteNothing:true,
+            pendingDecision:{targets:[{target:error.fixedOriginal.requestedSpec,original:error.fixedOriginal,
+              analysis:{status:'failed',code:error.code,reason:error.message,stderr:error.stderr,causeCode:error.causeCode}}]}};
+          if(!cancelled&&!deployed&&['FH_NODE_CONFIG_INVALID','FH_NODE_UNAVAILABLE','FH_MARKET_PREPARE_START_FAILED',
+            'FH_MARKET_PREPARE_IPC_FAILED','FH_MARKET_PREPARE_EXIT'].includes(error.code))return {
+            exitCode:2,bodyHandled:true,wroteNothing:true,nativeChoiceRequired:{code:error.code,reason:error.message,causeCode:error.causeCode,stderr:error.stderr}};
           const reasons=(error.reasons??[]).map(r=>`${r.file}:${r.line} (${r.kind})`).join('; ');
           const failure=error.pnpmFailure;
           const processDiagnostic=[error.stderr,Number.isInteger(error.exitCode)?'exitCode='+error.exitCode:null,error.signal?'signal='+error.signal:null,

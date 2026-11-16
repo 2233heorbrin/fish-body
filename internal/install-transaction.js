@@ -6,19 +6,21 @@ import { configureBackend } from './backend-entry.js'
 import { withStateConfig, loadProductionState } from './backend/production-state.mjs'
 import { createMarketBodyAdapter, prepareInChild, restorePreparedRegistration } from './backend/lib/market-runtime.mjs'
 import { classifyPnpmArgs, parseInstallSpecs, nativeOfficialSpecs } from './backend/fish-hand-admission-gate.mjs'
+import { readBodyPhase } from './backend/lib/body-switch.mjs'
 
 /** Entry declared by the bundle; called only by the experimental native seam.
  * No candidate JavaScript is imported. Preparation uses the existing backend.
  */
 export function createInstallTransaction(context) {
   const profileDir = context.dir
+  if (readBodyPhase({profileDir}).phase === 'off') return { run: async () => null }
   const data = bodyProfileData(context)
-  if (data.state().status === 'pending-initialization') data.initialize()
   const state = data.state()
   if (state.status !== 'ready') return { run: async ({ args }) => {
     const op = classifyPnpmArgs(args).op
     if (!['install', 'update', 'repair'].includes(op)) return null
-    return { exitCode: 1, stderr: 'FISH_DATA_NOT_READY: ' + (state.error || '请先在鱼的身体页面选择工作区并初始化。'), wroteNothing: true }
+    return { exitCode: 2, nativeChoiceRequired: { code:'FISH_DATA_NOT_READY',
+      reason:state.error || '胃尚未初始化；可明确选择本次原生安装，不要求先初始化。' }, wroteNothing: true }
   } }
   const configPath = configureBackend(state, context)
   const prepare = (input, controls) => {
@@ -29,7 +31,7 @@ export function createInstallTransaction(context) {
         : JSON.parse(execFileSync('tar', ['-xOf', source, 'package/package.json'], { encoding: 'utf8', windowsHide: true }))
       input = { ...input, spec: 'file:' + source.replaceAll('\\', '/'), packageName: manifest.name, version: manifest.version }
     }
-    return prepareInChild(input, controls)
+    return prepareInChild(input, {...controls,timeoutMs:context.prepareTimeoutMs})
   }
   const adapter = withStateConfig(configPath, () => createMarketBodyAdapter({ profileDir, prepare, prepareLocal: true }))
   const conf = withStateConfig(configPath, () => loadProductionState())
@@ -53,22 +55,27 @@ export function createInstallTransaction(context) {
     run: input => withStateConfig(configPath, async () => {
       const current = data.state()
       if (current.status !== 'ready') return {
-        exitCode: 1, stderr: 'FISH_DATA_NOT_READY: ' + (current.error || current.status), wroteNothing: true,
+        exitCode: 2, nativeChoiceRequired:{code:'FISH_DATA_NOT_READY',reason:current.error || current.status}, wroteNothing: true,
       }
       if (current.root !== state.root) return {
-        exitCode: 1, stderr: 'FH_ROOT_RELOAD_REQUIRED: 数据位置已切换；请重新加载身体。', wroteNothing: true,
+        exitCode: 2, nativeChoiceRequired:{code:'FH_ROOT_RELOAD_REQUIRED',reason:'数据位置已切换；旧实例不得继续写旧根。'}, wroteNothing: true,
       }
       if (nativeOfficialSpecs(input.args)) return null
       const op = classifyPnpmArgs(input.args).op
       const { specs, subcommand } = parseInstallSpecs(input.args)
       if (['install', 'update'].includes(op) && specs.length > 1) {
         let result
-        for (const spec of specs) {
-          result = await run({ ...input, args: [...input.args.slice(0, input.args.indexOf(subcommand)), 'add', spec,
-            ...input.args.slice(input.args.indexOf(subcommand) + 1).filter(a => a.startsWith('-'))] })
-          if (!result || result.exitCode !== 0) return result
+        const results=[]
+        for (const [index,spec] of specs.entries()) {
+          const decisionArgs=[...input.args.slice(0,input.args.indexOf(subcommand)),'add',spec,
+            ...input.args.slice(input.args.indexOf(subcommand)+1).filter(a=>a.startsWith('-'))]
+          result = await run({ ...input, args:decisionArgs })
+          results.push({target:spec,result})
+          if (!result || result.exitCode !== 0) return result && {...result,decisionArgs,completed:results.slice(0,-1),
+            remainingArgs:specs.slice(index+1).length?['add',...specs.slice(index+1),
+              ...input.args.slice(input.args.indexOf(subcommand)+1).filter(a=>a.startsWith('-'))]:null}
         }
-        return result
+        return {...result,completed:results}
       }
       const result = await run(input)
       if (result == null && ['install', 'update'].includes(op)) return {

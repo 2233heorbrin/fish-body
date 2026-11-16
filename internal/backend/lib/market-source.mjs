@@ -10,7 +10,7 @@ import { buildReview, writeReview } from './review.mjs';
 
 export function marketError(code,message,extra={}) {return Object.assign(new Error(`[${code}] ${message}`),{code,...extra});}
 export const npmCli = npmCommand;
-export function ingestNpmPublished(orchestrator,record,{pack=null}={}) {
+export function ingestNpmPublished(orchestrator,record,{pack=null,onCollected=null}={}) {
   const {riceRoot,stomachRoot,store}=orchestrator;
   const download=join(riceRoot,'npm',record.packageName,record.id);
   mkdirSync(download,{recursive:true});
@@ -50,8 +50,15 @@ export function ingestNpmPublished(orchestrator,record,{pack=null}={}) {
   const sourcePath=join(riceDir,'来源.json'),contentListPath=join(riceDir,'内容清单.json');
   const contentDoc={schema:'rice-content-list/v1',fileCount:files.length,files,contentHash};
   atomicJson(sourcePath,source);atomicJson(contentListPath,contentDoc);
+  onCollected?.({riceDir,sourceDoc:source,contentDoc,sourcePath,contentListPath});
   const review=buildReview({riceDir,sourceDoc:source,contentDoc,requestId:record.id});
   const result=writeReview({stomachRoot,repoName:pkg.name.replace('/','+'),reviewDoc:review});
+  if(record.state==='ready'&&record.source?.pinnedCommit===source.pinnedCommit
+    &&record.source?.contentHash===contentHash&&record.review?.complete) {
+    // Recollection is not revocation. approve() still revalidates the actual
+    // formal decision/artifact; do not reset a matching ready request to pending.
+    return {status:'already-present',record,review:JSON.parse(readFileSync(record.stomach.reviewPath,'utf8')),riceDir};
+  }
   const rec={...record,packageName:pkg.name,version:pkg.version,state:'awaiting-approval',
     source:{kind:'npm',upstreamUrl:record.intent.spec,pinnedCommit:source.pinnedCommit,contentHash,published:source.published},
     rice:{dir:riceDir,sourcePath,contentListPath,fileCount:files.length,treeHash:contentHash},
@@ -64,7 +71,7 @@ export function ingestNpmPublished(orchestrator,record,{pack=null}={}) {
 // Investigate actual code/config operations, not a description saying "memory"
 // or the mere capability to register a prompt section. Generic tool instructions
 // are allowed. The recorded locations explain a hold; absence is not a safety proof.
-export function reviewToolContent(root) {
+export function reviewToolContent(root, { evidenceOnly = false } = {}) {
   const reasons=[];
   const visit=(dir)=>{
     for(const entry of readdirSync(dir,{withFileTypes:true})) {
@@ -85,6 +92,6 @@ export function reviewToolContent(root) {
     }
   };
   visit(root);
-  if(reasons.length)throw marketError('FH_MARKET_DISCUSSION_REQUIRED','发现具体人格或记忆操作；材料已保留，请与 DSH 讨论后手动重试',{reasons});
-  return {reviewed:true,basis:'实际代码/配置定点检查；通用工具说明及缺少元数据不构成拒绝；运行时行为未被静态证明'};
+  if(reasons.length&&!evidenceOnly)throw marketError('FH_MARKET_DISCUSSION_REQUIRED','发现具体人格或记忆操作；材料已保留，需要明确安装决定',{reasons});
+  return {reviewed:true,reasons,basis:'实际代码/配置定点检查；通用工具说明及缺少元数据不构成拒绝；运行时行为未被静态证明'};
 }

@@ -1,5 +1,13 @@
 # 本机补丁与正式源码对应关系
 
+## 未发布：安装决定与实验宿主 v2
+
+身体维护源为 `internal/install-transaction.js`、`internal/backend/lib/market-{prepare,runtime,source}.mjs` 及既有编排／工具入口。采集原包后再分析，返回具体依据与未知项；不再替用户默认接受全部未知。匹配的正常工具安装意图及已有正式批准仍可继续。严格的正式受管批准接口及原完整性检查保留，原包安装结果不冒充审查通过。
+
+配套 rc.5 实验扩展 v2 单独维护宿主 `install-transaction.mjs`、新增 `install-decision.mjs` 及原生结果接线：首次调用返回待决定并释放 Profile 锁，后续 CLI 明确指定引用、动作、目标后重新加锁；胃导入或工厂失效仍可提供原生入口。原生部署前拒绝和原生已经完成的恢复需在结果中标明，避免扩展重复恢复，恢复钩子仍执行一次。完整补丁、维护源及重放／恢复材料由宿主交付维护，不在身体包静默部署。
+
+只支持该扩展的真实契约，不宣称官方原版或旧 v1 已具备两阶段继续能力；没有改写胃识别算法或自动脑区拆分。安装／原包／原生继续、脚本策略、用户开关、受影响 repair／批次和独立绑定须分别验收。日常部署、远端交付另外安排。
+
 ## Windows 默认 pnpm 补修（0.0.3 GitHub 源码交付）
 
 `fix/windows-pnpm-command` 在既有 main 基线上维护 `runtime-programs.mjs` 和 `w6-package.mjs`，不覆盖宿主扩展。原生宿主的 `{command:'pnpm'}` 在 Windows 不能直接交给 Node execFileSync；统一命令描述现在按配置环境的 PATH 选择 pnpm，将标准 npm 全局 / 包内 `.bin` shim 对应的 pnpm 包声明解析为 exe 或 JS bin。JS bin 复用严格 Node 选择，直接 exe 与显式 Node/DSH + JS、参数顺序和环境保持原配置。未配置时保留随包 pnpm 后备；不存在或未知布局的显式配置不后备。没有承诺支持任意自定义 shell 脚本。

@@ -300,6 +300,7 @@ export function fishHandToolDefinition({ orchestrator = null, getOrch = null, fr
         packageName: { type: 'string', description: 'submit：可省；审查前从固定源码 package.json 解析实际包名。显式提供时必须匹配。' },
         version: { type: 'string', description: 'submit：拟安装版本（可空，由审查产物决定）' },
         targetProfile: { type: 'string', description: 'submit：目标 profile 目录（默认 defaultProfileDir）' },
+        loadForm: { type: 'string', enum: ['tool','service','ui','bundle','library','data-only','unknown'], description: '已知加载形态；省略保持 unknown，不把完整插件认定为工具' },
         requestId: { type: 'string', description: 'review / approve / reject：请求 id' },
         approvedBy: { type: 'string', description: 'approve / reject：真实审批主体（用户标识）' },
         approvedScopes: { type: 'object', additionalProperties: true, description: 'approve：用户确认的批准范围' },
@@ -335,7 +336,7 @@ export function fishHandToolDefinition({ orchestrator = null, getOrch = null, fr
             spec: args.source,
             sourceUrl: args.source, ref:args.ref, subdir:args.subdir,
             targetProfile: args.targetProfile,
-            loadForm: 'tool',
+            loadForm: args.loadForm ?? 'unknown',
             note: `对话入口提交：${args.source}`,
           });
           return { ok: true, action, result: {
@@ -355,9 +356,11 @@ export function fishHandToolDefinition({ orchestrator = null, getOrch = null, fr
             reviewPath: out.record?.stomach?.reviewPath ?? null,
             complete: doc.review?.complete ?? null,
             capabilities,
+            shape: doc.candidates?.shape ?? 'unknown', loadForm: out.record?.loadForm ?? 'unknown',
+            evidence: doc.facts?.strongInjectionHits ?? [], limitations: doc.scopeNote,
             dependencies: (doc.candidates?.dependencies ?? []).map((d) => d.value ?? d),
             installScripts: doc.candidates?.installScripts?.value ?? doc.facts?.installScripts ?? null,
-            unknowns: (doc.unknowns ?? []).map((u) => ({ field: u.field, question: u.question ?? null })),
+            unknowns: (doc.unknowns ?? []).map((u) => ({ field: u.field, status:u.status, reason:u.reason, question: u.question ?? null })),
             ...(out.error ? {error:out.error} : {}),
             next: out.status==='failed' ? '按具体错误修正来源后重试' : 'approve（需用户确认范围与六维授权）',
           } };

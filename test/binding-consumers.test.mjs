@@ -12,12 +12,14 @@ const temp=fs.mkdtempSync(join(tmpdir(),'body-consumers-'))
 const dir=name=>{const path=join(temp,name);fs.mkdirSync(path,{recursive:true});return path}
 const save=(file,value)=>fs.writeFileSync(file,JSON.stringify(value))
 const profile=name=>{const path=dir(name);save(join(path,'package.json'),{name,private:true,dsh:{profile:{bundles:[]}}});return path}
-test('native composed old fishRoot migrates before UI initialization; shared conflicts stay visible',()=>{
+test('native composed old fishRoot remains available without forcing initialization; shared conflicts stay visible',async()=>{
  const path=profile('legacy'),root=dir('legacy-root'),ctx={dir:path,installAnchor:anchor}
  fs.writeFileSync(join(path,'cordis.patch.yml'),JSON.stringify([{insert:[{id:'fish-body',name:'unused',config:{fishRoot:root}}]}]))
  const data=bodyProfileData(ctx);assert.equal(data.state().root,root);assert.equal(data.state().status,'pending-initialization')
  const adapter=createInstallTransaction(ctx);assert.equal(typeof adapter.run,'function')
- assert.equal(data.state().status,'ready');assert.equal(JSON.parse(fs.readFileSync(join(path,'fish-body-state.json'))).frameworkRoot,root)
+ const waiting=await adapter.run({args:['add','synthetic-never-deploy']})
+ assert.equal(waiting.exitCode,2);assert.equal(waiting.nativeChoiceRequired.code,'FISH_DATA_NOT_READY')
+ assert.equal(data.state().status,'pending-initialization');assert(!fs.existsSync(join(path,'fish-body-state.json')))
  const conflicting=profile('conflict'),other=dir('other-root')
  save(join(conflicting,'fish-data.json'),{schema:'fish-profile-data/v1',root,components:['body']})
  fs.writeFileSync(join(conflicting,'cordis.patch.yml'),JSON.stringify([{insert:[{id:'fish-body',name:'unused',config:{fishRoot:other}}]}]))
@@ -33,19 +35,19 @@ test('saved backend root is a legacy input, independent binding wins and stale t
  assert.equal(JSON.parse(fs.readFileSync(join(path,'fish-body-state.json'))).frameworkRoot,root)
  data.initialize({root:other,switchRoot:true})
  const result=await adapter.run({args:['add','synthetic-never-deploy']})
- assert.equal(result.exitCode,1);assert.equal(result.wroteNothing,true);assert.match(result.stderr,/FH_ROOT_RELOAD_REQUIRED/)
+ assert.equal(result.exitCode,2);assert.equal(result.wroteNothing,true);assert.equal(result.nativeChoiceRequired.code,'FH_ROOT_RELOAD_REQUIRED')
  assert.equal(JSON.parse(fs.readFileSync(join(path,'fish-body-state.json'))).frameworkRoot,root,'old factory cannot switch live backend')
  const next=createInstallTransaction(ctx);assert.equal(typeof next.run,'function')
  assert.equal(JSON.parse(fs.readFileSync(join(path,'fish-body-state.json'))).frameworkRoot,other)
  fs.renameSync(other,other+'-moved')
  const unavailable=await next.run({args:['add','synthetic-never-deploy']})
- assert.equal(unavailable.exitCode,1);assert.equal(unavailable.wroteNothing,true);assert.match(unavailable.stderr,/FISH_DATA_NOT_READY: invalid-root/)
+ assert.equal(unavailable.exitCode,2);assert.equal(unavailable.wroteNothing,true);assert.equal(unavailable.nativeChoiceRequired.code,'FISH_DATA_NOT_READY')
 })
 test('invalid independent data is an explicit transaction failure, not fallback',async()=>{
  const path=profile('invalid'),root=dir('invalid-old')
  save(join(path,'fish-data.json'),{schema:'fish-profile-data/v1',root,components:['body']});fs.writeFileSync(join(path,'fish-body-data.json'),'{bad')
  const result=await createInstallTransaction({dir:path,installAnchor:anchor}).run({args:['add','synthetic-never-deploy']})
- assert.equal(result.exitCode,1);assert.equal(result.wroteNothing,true);assert.match(result.stderr,/FISH_BINDING_INVALID/)
+ assert.equal(result.exitCode,2);assert.equal(result.wroteNothing,true);assert.match(result.nativeChoiceRequired.reason,/FISH_BINDING_INVALID/)
  assert(!fs.existsSync(join(path,'fish-body-state.json')))
 })
 test('late bundled SHA activation cannot register on a disposed native owner',async()=>{

@@ -1,44 +1,92 @@
-// Runs outside the Profile installation lock, in a cancellable child process.
+// Cancellable preparation child. A pending result ends the caller's lock scope.
 import { pathToFileURL } from 'node:url';
 import { readFileSync, mkdirSync, existsSync, copyFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { runPnpm, preparePnpmWorkspace } from './w6-package.mjs';
 import { nativeOfficialSpecs } from '../fish-hand-admission-gate.mjs';
+import { npmCommand } from './runtime-programs.mjs';
 import { reviewToolContent, marketError } from './market-source.mjs';
 // Maintenance tree keeps the orchestrator beside the gate; installed modules
 // reuse the approval host's existing orchestrator rather than copying it again.
 import { FishHandOrchestrator } from '../fish-hand-orchestrator.mjs';
 
-export function prepareMarketPackage({frameworkRoot,profileDir,spec,requestId,sourceUrl=null,packageName=null,version=null,registryUrl=null},report=()=>{}) {
+// Capture only files from the already acquired source. Never run candidate
+// lifecycle scripts to create an original-package choice.
+function fixedOriginal(collected, spec, requestId) {
+  const source=collected.sourceDoc;
+  let archive=source.published?.tarballPath,integrity=source.published?.integrity;
+  if(!archive) {
+    const destination=join(dirname(collected.riceDir),'original-'+requestId);
+    mkdirSync(destination,{recursive:true});
+    const cli=npmCommand();
+    const rows=JSON.parse(execFileSync(cli.exe,[...cli.args,'pack','--ignore-scripts','--json','--pack-destination',destination],
+      {cwd:join(collected.riceDir,'仓库'),env:cli.env,encoding:'utf8',windowsHide:true,maxBuffer:32*1024*1024}));
+    if(rows.length!==1)throw marketError('FH_ORIGINAL_PACKAGE_INVALID','固定源码没有生成唯一原包');
+    archive=join(destination,rows[0].filename);
+    integrity=rows[0].integrity;
+  }
+  const baseline=join(dirname(archive),requestId+'-original.bytes');
+  writeFileSync(baseline,readFileSync(archive));
+  return {archive,baseline,integrity,
+    packageName:source.packageJson.name,version:source.packageJson.version,requestedSpec:spec,
+    pinnedCommit:source.pinnedCommit,subdir:source.subdir??'',contentHash:source.contentHash,
+    delivery:source.published?'original published tarball':'npm pack --ignore-scripts of fixed commit/subdir; no adaptation or build'};
+}
+
+export function prepareMarketPackage({frameworkRoot,profileDir,spec,requestId,sourceUrl=null,packageName=null,version=null,registryUrl=null},report=()=>{},onSource=()=>{}) {
   const orchestrator=new FishHandOrchestrator({frameworkRoot});
-  const request=orchestrator.createPending({requestId,packageName,version,spec,sourceUrl,targetProfile:profileDir,loadForm:'tool',
-    note:'用户在市场主动安装/更新纯工具插件，含首次加载及必要准备；人格/记忆修改不在授权内'});
+  const ref=sourceUrl?spec.match(/#(.+)$/)?.[1]:null;
+  const request=orchestrator.createPending({requestId,packageName,version,spec,sourceUrl,ref,targetProfile:profileDir,loadForm:'unknown',
+    note:'本次安装意图；分析材料不是用户决定，不授权额外人格、记忆或脑区改写'});
   orchestrator.store.save({...request,...(!sourceUrl?{sourceKind:'npm'}:{}),marketRegistry:registryUrl});
-  report('下载并固定实际发布内容');
-  const result=orchestrator.runW2W3(request.id);
-  if(result.status==='failed')throw marketError('FH_MARKET_SOURCE_FAILED','来源材料准备失败');
-  report('胃：审查实际代码和配置');
-  const assessment=reviewToolContent(join(result.record.rice.dir,'仓库'));
-  const review=result.review??JSON.parse(readFileSync(result.record.stomach.reviewPath,'utf8'));
-  const capabilities=(review.candidates.capabilities??[]).map(c=>c.value);
-  const build=review.facts.installScripts.length>0 || Object.keys(review.facts.packageJson?.scripts??{}).some(k=>['build','prebuild','postbuild','prepack'].includes(k))
-    || Object.keys({...review.facts.packageJson?.dependencies,...review.facts.packageJson?.optionalDependencies}).length>0;
-  const approvedScopes={capabilities,replaces:[],credentialScopes:[],externalSideEffects:false,installScripts:build};
-  const dim=(granted,detail,basis)=>({granted,detail,basis});
-  const basis='用户市场安装/更新意图授权纯工具安装、首次加载和必要构建；内容已审查，无具体人格/记忆改动证据';
-  const authorization={firstHostCodeExecution:dim(true,capabilities,basis),toolReplacement:dim(false,[],basis),
-    credentialAccess:dim(false,[],basis),externalActions:dim(false,[],basis),personaMemoryChange:dim(false,[],basis),
-    buildScripts:{...dim(build,build?['necessary-install-build']:[],basis),reviewedInstallIntent:true}};
-  report('手：准备依赖与可运行安装包');
-  const ready=orchestrator.approve({requestId:request.id,approvedBy:'market-user-install-intent',approvedScopes,authorization,
-    unknownDispositions:review.unknowns.map(u=>({field:u.field,originalStatus:'unknown',disposition:'accepted-as-residual',basis:assessment.basis+'；'+basis})),
-    conclusionFields:{shape:'tool',capabilities,basis:assessment.basis,
-      injectionAssessment:{personaInjection:'unknown',memoryInjection:'unknown'}},marketInstall:true});
-  if(ready.status!=='ready')throw marketError('FH_MARKET_NOT_READY','准备未完成，未进入安装阶段');
-  report('受管安装包已就绪，交给 DSH 原生安装');
-  return {spec:ready.package.installSpec,packageName:ready.record.packageName,version:ready.record.version,requestId:request.id};
+  let original=null;
+  report('下载并固定实际内容；不执行候选脚本');
+  const pending=(analysis)=>({pendingDecision:true,packageName:original.packageName,version:original.version,
+    requestId:request.id,original,analysis,deployed:false});
+  try {
+    const result=orchestrator.runW2W3(request.id,{onCollected:collected=>{
+      original=fixedOriginal(collected,spec,request.id);onSource(original);
+    }});
+    if(result.status==='failed') {
+      if(!original)throw marketError('FH_MARKET_SOURCE_FAILED','来源材料准备失败', {diagnostic:result.error});
+      return pending({status:'failed',reason:result.error,basis:'已固定原包；尚未完成胃分析'});
+    }
+    report('胃：保留证据、候选判断和未知项');
+    const assessment=reviewToolContent(join(result.record.rice.dir,'仓库'),{evidenceOnly:true});
+    const review=result.review??JSON.parse(readFileSync(result.record.stomach.reviewPath,'utf8'));
+    const pkg=review.facts.packageJson;
+    const loadForm=pkg.dsh?.bundle?'bundle':pkg.dsh?.client?'ui':review.candidates.capabilities.some(c=>c.value==='tool:register')?'tool':'unknown';
+    orchestrator.store.save({...result.record,loadForm});
+    const analysis={status:'analyzed',requestId:request.id,reviewPath:result.record.stomach.reviewPath,
+      shape:review.candidates.shape,loadForm,reasons:assessment.reasons,
+      candidates:review.candidates,unknowns:review.unknowns,basis:assessment.basis,
+      limitations:'静态材料不能证明运行行为；未执行候选脚本。原包选择不授权脑区合并或覆盖用户人格/记忆。'};
+    // Reuse only an existing, content/Profile/scope-bound formal authorization.
+    // approve() retains its complete review and integrity requirements.
+    try {
+      const ready=orchestrator.approve({requestId:request.id,marketInstall:true});
+      if(ready.status==='ready')return {spec:ready.package.installSpec,packageName:ready.record.packageName,
+        version:ready.record.version,requestId:request.id,analysis,authorization:'existing-bound-decision'};
+    } catch(error) {
+      if(error.code!=='FH_NO_APPROVER')throw error;
+    }
+    // The existing install intent covers an ordinary tool's installation and
+    // first load, not acceptance of every unknown or new concrete operations.
+    const ordinary=loadForm==='tool'&&review.candidates.shape==='tool'&&!assessment.reasons.length
+      && !(review.candidates.risks??[]).some(r=>['file-write','child-process'].includes(r.value));
+    if(ordinary)return {original,packageName:original.packageName,version:original.version,requestId:request.id,
+      analysis,authorization:'matching-tool-install-intent'};
+    return pending({...analysis,status:'needs-discussion',reason:assessment.reasons.length
+      ?'发现具体人格或记忆操作，须讨论本次原包安装':'形态或行为超出普通工具安装意图，尚无匹配的已有授权'});
+  } catch(error) {
+    // Content acquisition/identity/integrity failures never become choices.
+    if(!original||/^(?:FH_(?:NPM|PACKAGE|ORIGINAL)|SOURCE_)/.test(error.code??'')
+      ||/INTEGRITY|ARCHIVE|IDENTITY|CONTENT_(?:DRIFT|MISMATCH)/.test(error.code??''))throw error;
+    return pending({status:'failed',code:error.code??'FH_ANALYSIS_FAILED',reason:error.message,
+      basis:'原包已固定；分析或受管准备未完成，不记为通过'});
+  }
 }
 
 export function prepareMarketRepair(input,report=()=>{}) {
@@ -123,7 +171,13 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href) {
     let queue=Promise.resolve(),sendFailure=null;
     const report=stage=>{queue=queue.then(()=>sendMessage({stage})).catch(error=>{sendFailure??=error;});};
     try {
-      const value=input.repair?prepareMarketRepair(input,report):prepareMarketPackage(input,report);
+      const onSource=source=>{
+        // Start IPC immediately, before the synchronous scanner can fail or
+        // exceed its deadline. Keep completion/error ordering in the same queue.
+        const sent=sendMessage({source});
+        queue=queue.then(()=>sent).catch(error=>{sendFailure??=error;});
+      };
+      const value=input.repair?prepareMarketRepair(input,report):prepareMarketPackage(input,report,onSource);
       await queue;if(sendFailure)throw sendFailure;await sendMessage({value});
     }catch(error) {
       await queue;

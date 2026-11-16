@@ -150,10 +150,10 @@ export class FishHandOrchestrator {
    * `饭/github.com/<owner>/<repo>/仓库`，再走同一套 ingest / collectFromGit；
    * 本地 `repoDir` 行为保持不变。
    */
-  runW2W3(requestId) {
+  runW2W3(requestId, { onCollected = null } = {}) {
     let rec = this.store.load(requestId);
     if (!rec) throw fhError('FH_NO_REQUEST', `请求不存在：${requestId}`);
-    if (rec.sourceKind==='npm') return ingestNpmPublished(this, rec);
+    if (rec.sourceKind==='npm') return ingestNpmPublished(this, rec, { onCollected });
 
     let repoDir = rec.repoDir;
     let riceRoot = this.riceRoot;
@@ -206,6 +206,7 @@ export class FishHandOrchestrator {
     const repoName = sourceMaterialName(sourceEntry?.repo ?? rec.repositoryName ?? String(rec.pluginId).replace(/^@/,'').replace(/\//g,'+'),subdir);
     const out = processRequest({
       root: this.handRoot,
+      onCollected,
       repo: { dir: repoDir, name: repoName, subdir, sourceEntry, collected },
       pinnedCommit,
       request: rec,

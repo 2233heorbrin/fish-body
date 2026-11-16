@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname, basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -16,7 +16,7 @@ const { ingestNpmPublished } = await load('lib/market-source.mjs')
 const { buildInstallPackage, inspectInstallPackage } = await load('lib/w6-package.mjs')
 const { recomputeFiles } = await load('lib/artifact.mjs')
 const { treeHashOf, sri512, treeManifest } = await load('lib/w6-utils.mjs')
-const req = createRequire(join(body, 'package.json'))
+const req = createRequire(realpathSync(join(body, 'package.json')))
 const { Header } = req('tar')
 const npmCli = join(dirname(req.resolve('npm/package.json')), 'bin/npm-cli.js')
 const root = mkdtempSync(join(tmpdir(), 'fish-archive-'))
@@ -62,7 +62,7 @@ test('actual npm publish -> collection -> actual pnpm package preserves UTF-8 na
   const copy = join(root, '独立回解')
   mkdirSync(copy)
   const script = `const {createRequire}=require('node:module');const req=createRequire(process.argv[1]);req('tar').x({file:process.argv[2],cwd:process.argv[3],sync:true,strict:true});`
-  execFileSync(process.execPath, ['-e', script, join(body, 'package.json'), built.tgzPath, copy],
+  execFileSync(process.execPath, ['-e', script, realpathSync(join(body, 'package.json')), built.tgzPath, copy],
     { env: { ...process.env, PATH: '', NODE_OPTIONS: '' }, windowsHide: true })
   assert.deepEqual(treeManifest(join(copy, 'package')), built.runtimeFiles)
 })

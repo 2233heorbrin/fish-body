@@ -43,7 +43,7 @@ export function prepareBackend(ctx, state) {
   // or a claimed DSH version. Original official installations remain blocked.
   const capability = import(pathToFileURL(req.resolve('@deepseek-ai/dsh-plugin-manager')).href)
   capability.then(module => {
-    if (module.installTransactionExtensionVersion !== 1) return
+    if (![1, 2].includes(module.installTransactionExtensionVersion)) return
     ctx.effect(() => registerMarketManager(profileDir, null,
       createInstallTransaction({ ...ctx.profileContext, dir: profileDir })))
   })
