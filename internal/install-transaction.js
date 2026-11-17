@@ -33,7 +33,8 @@ export function createInstallTransaction(context) {
     }
     return prepareInChild(input, {...controls,timeoutMs:context.prepareTimeoutMs})
   }
-  const adapter = withStateConfig(configPath, () => createMarketBodyAdapter({ profileDir, prepare, prepareLocal: true }))
+  const adapter = withStateConfig(configPath, () => createMarketBodyAdapter({ profileDir, prepare, prepareLocal: true,
+    sourcePreservationVersion:context.fixedPackageSourcesVersion }))
   const conf = withStateConfig(configPath, () => loadProductionState())
   const registry = existsSync(conf.registryPath) ? JSON.parse(readFileSync(conf.registryPath, 'utf8')) : { plugins: [] }
   const beforeRows = Array.isArray(registry.plugins) ? registry.plugins : Object.values(registry.plugins ?? {})

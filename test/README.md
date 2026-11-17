@@ -1,5 +1,7 @@
 # 安装产物回归
 
+`install-source-preservation.test.mjs` 验证实际包的普通插件/身体自身原包部署及 repair 转交同一来源契约、宿主能力缺失与原包变化在部署前拒绝。它不代替宿主原生 resolver、pnpm、明确续接、真实更新消费者及远端安装验收；这些在匹配扩展的合成环境另验。
+
 `backend-install-decision.test.mjs` 要求独立安装产物和 `FISH_DSH_TEST_ANCHOR` 指向本轮实验宿主 v2；不会用旧 v1 或官方宿主冒充。覆盖实际采集／分析、具体混合操作证据、未知形态、既有正式批准复用、原包内容绑定、import／同步与异步工厂故障、按目标决定、取消、未部署不恢复、部署后恢复及恢复失败、胃不可用和准备进程超时。合成授权仅用于夹具，业务不默认接受残留风险。真实 CLI→明确继续→原生部署→Loader 及真实 repair／批次／重载须另验；单测不代表桌面按钮通过。
 
 测试实现从 FISH_TEST_INSTALL_ROOT/node_modules/fish-body 加载；先打包并在独立目录安装，不能将变量指向源码根代替安装产物。

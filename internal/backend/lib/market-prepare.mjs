@@ -35,7 +35,7 @@ function fixedOriginal(collected, spec, requestId) {
     delivery:source.published?'original published tarball':'npm pack --ignore-scripts of fixed commit/subdir; no adaptation or build'};
 }
 
-export function prepareMarketPackage({frameworkRoot,profileDir,spec,requestId,sourceUrl=null,packageName=null,version=null,registryUrl=null},report=()=>{},onSource=()=>{}) {
+export function prepareMarketPackage({frameworkRoot,profileDir,spec,requestId,sourceUrl=null,packageName=null,version=null,registryUrl=null,updateSpec=spec},report=()=>{},onSource=()=>{}) {
   const orchestrator=new FishHandOrchestrator({frameworkRoot});
   const ref=sourceUrl?spec.match(/#(.+)$/)?.[1]:null;
   const request=orchestrator.createPending({requestId,packageName,version,spec,sourceUrl,ref,targetProfile:profileDir,loadForm:'unknown',
@@ -47,7 +47,7 @@ export function prepareMarketPackage({frameworkRoot,profileDir,spec,requestId,so
     requestId:request.id,original,analysis,deployed:false});
   try {
     const result=orchestrator.runW2W3(request.id,{onCollected:collected=>{
-      original=fixedOriginal(collected,spec,request.id);onSource(original);
+      original=fixedOriginal(collected,updateSpec,request.id);onSource(original);
     }});
     if(result.status==='failed') {
       if(!original)throw marketError('FH_MARKET_SOURCE_FAILED','来源材料准备失败', {diagnostic:result.error});
@@ -132,7 +132,7 @@ export function prepareMarketRepair(input,report=()=>{}) {
       } else if(!/^https?:/.test(spec)) {
         throw new Error('FH_MARKET_SOURCE_FAILED: 既有来源入口不支持 '+name+' 的修复来源');
       }
-      const ready=prepareMarketPackage({...input,requestId:requestId+'-'+prepared.length,spec:target,packageName:name,version:null,sourceUrl},report);
+      const ready=prepareMarketPackage({...input,requestId:requestId+'-'+prepared.length,spec:target,updateSpec:spec,packageName:name,version:null,sourceUrl},report);
       prepared.push(ready);resolutions.push({packageName:name,beforeVersion:installed.get(name)??null,version:ready.version,sourceRef:reference});
       continue;
     }

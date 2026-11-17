@@ -13,6 +13,7 @@ import { samePath } from './path-identity.mjs';
 import { atomicJson } from './w6-utils.mjs';
 import { expectedDeployedHashes, verifyDeployedContent } from './w6-deploy.mjs';
 import { parseInstallSpecs, classifyPnpmArgs } from '../fish-hand-admission-gate.mjs';
+import { originalSourceOptions } from './original-source.mjs';
 
 const SLOT=Symbol.for('fish-body.market.v1');
 const state=globalThis[SLOT]??= {managers:new Map()};
@@ -134,7 +135,8 @@ function verifyResult(conf,profileDir,prepared) {
     const installed=JSON.parse(readFileSync(join(profileDir,'node_modules',prepared.packageName,'package.json'),'utf8'));
     if(installed.name!==prepared.packageName||installed.version!==prepared.version)
       throw new Error('FH_MARKET_DEPLOY_IDENTITY_MISMATCH: 原包安装身份不符');
-    return {packageName:installed.name,version:installed.version,spec:'file:'+prepared.original.archive};
+    const declared=JSON.parse(readFileSync(join(profileDir,'package.json'),'utf8')).dependencies?.[installed.name];
+    return {packageName:installed.name,version:installed.version,spec:declared??'file:'+prepared.original.archive};
   }
   const current=loadProductionState().candidates?.[prepared.packageName];
   const declared=JSON.parse(readFileSync(join(profileDir,'package.json'),'utf8')).dependencies?.[prepared.packageName];
@@ -147,7 +149,7 @@ function verifyResult(conf,profileDir,prepared) {
   if(!verified.ok)throw new Error('FH_MARKET_DEPLOY_CONTENT_MISMATCH: 安装内容未与受管包对应');
   return {packageName:prepared.packageName,version:prepared.version,spec:prepared.spec};
 }
-export function createMarketBodyAdapter({profileDir,switchBody=null,prepare=prepareInChild,prepareLocal=false}) {
+export function createMarketBodyAdapter({profileDir,switchBody=null,prepare=prepareInChild,prepareLocal=false,sourcePreservationVersion=0}) {
   return {
     profileDir,
     managedSpec(name,spec) {
@@ -185,9 +187,10 @@ export function createMarketBodyAdapter({profileDir,switchBody=null,prepare=prep
             signal?.throwIfAborted();
             for(const p of repairPrepared)if(p.original&&!readFileSync(p.original.archive).equals(readFileSync(p.original.baseline)))
               throw new Error('FH_NPM_INTEGRITY_MISMATCH: 原包内容已改变');
+            const fixedPackageSources=repairPrepared.flatMap(p=>originalSourceOptions(p.original,sourcePreservationVersion)?.fixedPackageSources??[]);
             deployed=true;
             const result=await deploy(plan.prepared?.length?['add',...plan.prepared.map(p=>p.original?'file:'+p.original.archive:p.spec),
-              ...args.filter(a=>a.startsWith('--'))]:args);
+              ...args.filter(a=>a.startsWith('--'))]:args,fixedPackageSources.length?{fixedPackageSources}:undefined);
             if(result.exitCode!==0||result.cancelled||result.timedOut)for(const p of repairPrepared)
               restorePreparedRegistration(conf,repairPrevious.find(r=>r.packageName===p.packageName),p);
             if(result.exitCode===0&&!result.cancelled&&!result.timedOut) {
@@ -226,9 +229,10 @@ export function createMarketBodyAdapter({profileDir,switchBody=null,prepare=prep
           const commandIndex=args.indexOf(subcommand);
           if(prepared.original&&!readFileSync(prepared.original.archive).equals(readFileSync(prepared.original.baseline)))
             throw new Error('FH_NPM_INTEGRITY_MISMATCH: 原包内容已改变');
+          const sourceOptions=originalSourceOptions(prepared.original,sourcePreservationVersion);
           deployed=true;
           const result=await deploy([...args.slice(0,commandIndex),'add',...args.slice(commandIndex+1).filter(a=>a!==raw),
-            prepared.original?'file:'+prepared.original.archive:prepared.spec]);
+            prepared.original?'file:'+prepared.original.archive:prepared.spec],sourceOptions);
           if(result.exitCode!==0||result.timedOut||result.cancelled) {
             restorePreparedRegistration(conf,previous,prepared);
             return {...result,bodyHandled:true};

@@ -1,5 +1,13 @@
 # 本机补丁与正式源码对应关系
 
+## 0.0.5-dev.1：原包更新来源保留候选
+
+公开维护源在 `original-source.mjs`、`market-runtime.mjs`、`market-prepare.mjs` 和原生事务入口。它们传递用户来源与本次固定内容；repair 保留原分支/标签，不把解析提交当作新的更新渠道。远端原包要求匹配宿主的 `fixedPackageSourcesVersion=1`，没有身体自身免检。
+
+宿主独立维护 `install-source.mjs` 及普通部署/明确original续接调用方。它在原生锁内临时组合 pnpm 12 resolver 与既有 hooks，让 pnpm 保留直接依赖来源、写入固定解析和实际归档完整性；同时核对发布文件。等待释放锁、status不新增决定、重新持锁继续和原生失败恢复沿用 v2。不是安装file之后孤立手改manifest，也不需要重写市场更新算法；既有消费者读取原生manifest和lock。原包归档仍可能被lock引用，不可随意删除。
+
+这些宿主变更仍不随公开身体包部署。旧身体首次接入通过原有pending/original交接，由已部署的新宿主消费其已保存的来源/提交/原包，再安装新身体；不能假设下载中的新身体会先接管自身。本候选的实际验收和部署结果分别记录，开发版本不覆盖v0.0.4。
+
 ## 0.0.4：安装决定与实验宿主 v2
 
 身体维护源为 `internal/install-transaction.js`、`internal/backend/lib/market-{prepare,runtime,source}.mjs` 及既有编排／工具入口。采集原包后再分析，返回具体依据与未知项；不再替用户默认接受全部未知。匹配的正常工具安装意图及已有正式批准仍可继续。严格的正式受管批准接口及原完整性检查保留，原包安装结果不冒充审查通过。

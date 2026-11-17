@@ -45,7 +45,8 @@ export function prepareBackend(ctx, state) {
   capability.then(module => {
     if (![1, 2].includes(module.installTransactionExtensionVersion)) return
     ctx.effect(() => registerMarketManager(profileDir, null,
-      createInstallTransaction({ ...ctx.profileContext, dir: profileDir })))
+      createInstallTransaction({ ...ctx.profileContext, dir: profileDir,
+        fixedPackageSourcesVersion:module.fixedPackageSourcesVersion })))
   })
   return { handle, configPath, adapter: scopedAdapter, status: 'host-blocked',
     capability,
