@@ -1,4 +1,5 @@
 import { withStateConfig } from './production-state.mjs';
+import { DISCUSSION_GUIDE } from '../analysis/conversation.mjs';
 import { readFileSync } from 'node:fs';
 import { samePath } from './lib/path-identity.mjs';
 /**
@@ -88,7 +89,7 @@ const FULL_TOOL_DESCRIPTION = '鱼的手：submit 把 GitHub 链接下载到饭�
   + 'reject 拒绝；status 列出已登记插件。analyze 显式选择 initial 初扫或 deep 全源码深查，analysisSource 明确选择本地源码目录或既有请求的固定材料；返回 analysisId。'
   + 'query 用 analysisId 按 summary/evidence/file/capability/phase 分页取证，不启动分析器。新 deep 可用 initialAnalysisId 关联同源初扫。'
   + 'task 以 compatibility/reverse 创建任务；list/read 分页读取，update 带 expectedRevision 记录能力选择及有来源的判断/依赖决定，produce 产出方案或组件材料，output 分页读取，confirm 只确认具体版本而不授权执行。'
-  + '只产出分析材料和拆分依据，不执行候选代码，不代表安全批准或拆分成功；不调用模型。本工具不自行批准、不安装插件。';
+  + '只产出分析材料和拆分依据，不执行候选代码，不代表安全批准或拆分成功；不调用模型。本工具不自行批准、不安装插件。' + DISCUSSION_GUIDE;
 
 /** 测试注入钩子（W4 arm 用）：显式喂入 profileDir / patchPath 等线索。
  *  生产由 apply / createFishBodyApprovalHost 的 config 显式提供，不依赖此钩子。 */
@@ -324,6 +325,15 @@ export function fishHandToolDefinition({ orchestrator = null, getOrch = null, fr
           addCapabilities: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Attributed {name,category:tool|brain|unknown,origin,evidenceRefs}; never relabel as program discovery' },
           dependencyDecisions: { type: 'array', items: { type: 'object', additionalProperties: true }, description: '{id,decision:retain|narrow|exclude|pending,rationale,origin,evidenceRefs,proposedChange?,businessSemanticChange:yes|no|unknown,acceptIncidental?,acceptanceReason?}; incidental acceptance requires user attribution' },
           unknowns: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Attributed {text,origin,evidenceRefs}; preserve unresolved tradeoffs' },
+          explanation: { type: ['object', 'null'], additionalProperties: false, description: '当前对话模型核对证据后的可读说明；null 清除。绑定当前分析和方案 revision，内容变更后失效；仅更新说明不改变选择或用户确认。', properties: {
+            origin: { type: 'object', additionalProperties: false, required: ['kind','actor','reason'], properties: { kind: { type: 'string', enum: ['current-model'] }, actor: { type: 'string' }, reason: { type: 'string' } } },
+            goal: { type: 'string' }, recommendation: { type: 'string' },
+            retained: { type: 'array', items: { type: 'object', additionalProperties: true }, description: '{capabilityId,label?,reason,evidenceRefs?}；必须对应当前保留能力，label 是模型说明名' },
+            excluded: { type: 'array', items: { type: 'object', additionalProperties: true }, description: '{capabilityId,label?,reason,evidenceRefs?}；必须对应当前未选能力' },
+            impacts: { type: 'array', items: { type: 'object', additionalProperties: true }, description: '{dependencyId,text,evidenceRefs?}：依赖对使用的影响' },
+            questions: { type: 'array', maxItems: 5, items: { type: 'object', additionalProperties: true }, description: '{text,capabilityId?,dependencyId?,evidenceRefs?}：少量真正影响功能的待选问题' },
+            nextSteps: { type: 'array', items: { type: 'string' } }, evidenceRefs: { type: 'array', items: { type: 'string' } },
+          } },
         } },
         analysisType: { type: 'string', enum: ['initial', 'deep'], description: 'analyze 必填；initial 不运行深查，deep 显式运行全源码 ts-morph（不是单函数增量）' },
         analysisSource: { type: 'object', additionalProperties: false, required: ['kind'], properties: {

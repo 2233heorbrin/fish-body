@@ -58,7 +58,8 @@ async function all(id, type, options = {}) {
   } while (offset !== null);
   assert.equal(rows.length, total); return rows;
 }
-const dir = id => path.join(root, '鱼的胃', '分析', id);
+const { findRecordDirectory } = await load('internal/analysis/records.mjs');
+const dir = id => findRecordDirectory(path.join(root, '鱼的胃', '分析'), 'analysis', id);
 let first, deep, partial;
 
 test('packed fish_hand analysis integration', async t => {

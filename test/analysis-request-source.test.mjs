@@ -51,7 +51,8 @@ function material(name) {
 }
 const analysis = (m, extra = {}) => ({ action: 'analyze', analysisType: 'initial', analysisSource: m.source, ...extra });
 const query = id => ({ action: 'query', analysisId: id, queryType: 'summary' });
-const output = id => path.join(root, '鱼的胃/分析', id);
+const { findRecordDirectory, recordEntries } = await load('internal/analysis/records.mjs');
+const output = id => findRecordDirectory(path.join(root, '鱼的胃/分析'), 'analysis', id);
 let good, initial, deep;
 
 test('fixed request material content and snapshot contract', async t => {
@@ -136,7 +137,7 @@ test('fixed request material content and snapshot contract', async t => {
     assert.equal(analyzerLoads().length - before, 1);
     assert(fs.readFileSync(file).equals(original));
     assert.equal(read(path.join(work, 'race-writer.json')).restoredBeforeAdmission, true);
-    const failed = fs.readdirSync(path.join(root, '鱼的胃/分析')).map(id => read(path.join(output(id), 'record.json'))).find(r => r.source.requestId === 'copy-race');
+    const failed = recordEntries(path.join(root, '鱼的胃/分析'), 'analysis').map(({dir}) => read(path.join(dir, 'record.json'))).find(r => r.source.requestId === 'copy-race');
     assert.equal(failed.status, 'failed'); assert.equal(failed.bundle, undefined);
   });
 });

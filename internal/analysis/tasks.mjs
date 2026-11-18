@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { writeJson } from './io.mjs';
+import { recordEntries, findRecordDirectory, newRecordDirectory, sourcePlugin, recordMetadata, recordPlugin } from './records.mjs';
+import { conversationGuide } from './conversation.mjs';
 const read = f => JSON.parse(fs.readFileSync(f, 'utf8'));
 const modes = ['compatibility', 'reverse'], categories = ['tool', 'brain', 'mixed', 'unknown'];
 const depKinds = ['implementation', 'shared-state-initialization', 'lifecycle-release', 'resources-programs', 'incidental-behavior', 'unresolved-relation'];
@@ -65,14 +67,50 @@ function dependencies(t, a) {
     });
   });
 }
+function currentExplanation(t) {
+  return t.explanation?.revision === t.revision && t.explanation.analysisId === t.analysisId ? t.explanation : null;
+}
+function explain(value, t, a) {
+  if (value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('请提供当前模型的方案说明对象。');
+  const allowed = ['origin','goal','recommendation','retained','excluded','impacts','questions','nextSteps','evidenceRefs'];
+  if (Object.keys(value).some(k => !allowed.includes(k))) throw Error('说明含不支持字段，请按 taskPatch.explanation 保存。');
+  const attributed = origin(value.origin);
+  if (attributed.kind !== 'current-model') throw Error('方案说明必须保留 current-model 归属，不代替用户决定。');
+  const items = (input, max, map) => {
+    if (!Array.isArray(input ?? []) || (input ?? []).length > max) throw Error('请缩短说明，只保留少量相关功能、影响和问题。');
+    return (input ?? []).map(map);
+  };
+  const capability = (id, selected) => {
+    if (!t.capabilities.some(c => c.id === id) || t.selected.includes(id) !== selected) throw Error('说明中的保留/排除功能与当前选择不一致，请先刷新任务。');
+    return id;
+  };
+  const feature = selected => item => ({ capabilityId: capability(item.capabilityId, selected),
+    ...(item.label ? { label: text(item.label, '功能说明名', 80) } : {}), reason: text(item.reason, '功能取舍理由', 240), evidenceRefs: refs(item.evidenceRefs ?? [], a) });
+  const dependency = id => { if (!t.dependencies.some(d => d.id === id)) throw Error('说明引用了当前任务之外的依赖，请刷新任务。'); return id; };
+  const result = { analysisId: t.analysisId, revision: t.revision, origin: attributed, goal: text(value.goal, '用户目标', 400), recommendation: text(value.recommendation, '简明推荐', 800),
+    retained: items(value.retained, 12, feature(true)), excluded: items(value.excluded, 12, feature(false)),
+    impacts: items(value.impacts, 12, item => ({ dependencyId: dependency(item.dependencyId), text: text(item.text, '使用影响', 280), evidenceRefs: refs(item.evidenceRefs ?? [], a) })),
+    questions: items(value.questions, 5, item => ({ text: text(item.text, '待选问题', 280),
+      ...(item.capabilityId ? { capabilityId: capability(item.capabilityId, t.selected.includes(item.capabilityId)) } : {}),
+      ...(item.dependencyId ? { dependencyId: dependency(item.dependencyId) } : {}), evidenceRefs: refs(item.evidenceRefs ?? [], a) })),
+    nextSteps: items(value.nextSteps, 6, item => text(item, '后续方向', 280)), evidenceRefs: refs(value.evidenceRefs ?? [], a) };
+  if (Buffer.byteLength(JSON.stringify(result)) > 7000) throw Error('说明过长，请缩短推荐和问题；详细证据继续按需分页读取。');
+  return result;
+}
 function overview(t) {
+  const features = selected => t.capabilities.filter(c => t.selected.includes(c.id) === selected).slice(0,8).map(({id,name,category}) => ({id,name,category}));
   return { taskId: t.taskId, profile: t.profile, binding: t.binding, revision: t.revision, mode: t.mode, phase: t.phase,
-    analysisId: t.analysisId, source: t.source, plugin: t.plugin, classification: t.classification, judgment: t.judgment,
+    createdAt: t.createdAt, updatedAt: t.updatedAt ?? t.createdAt,
+    analysisId: t.analysisId, analysisKind: t.analysisKind, initialAnalysisId: t.initialAnalysisId ?? null,
+    source: t.source, plugin: t.plugin, classification: t.classification, judgment: t.judgment,
     selected: t.selected, counts: { capabilities: t.capabilities.length, dependencies: t.dependencies.length, pending: t.dependencies.filter(d => d.decision === 'pending').length },
     confirmation: t.confirmation, outputs: t.outputs, completeness: t.completeness,
+    features: { retained: features(true), excluded: features(false), excludedCount: t.capabilities.length - t.selected.length },
+    explanation: currentExplanation(t), explanationState: currentExplanation(t) ? 'current' : t.explanation ? 'stale' : 'missing',
     unknownCount: (t.analysisUnknowns?.length ?? 0) + t.unknowns.length,
     boundary: 'Plans/materials only; no adaptation, package, installation or global brain changes. Confirmation grants no deployment authority.',
-    conversation: { action: 'task', taskOperation: 'read', taskId: t.taskId, taskView: 'dependencies', next: 'Use task update with expectedRevision, attributed judgments/decisions; produce; read output. Use query for original paged evidence.' } };
+    conversation: { action: 'task', taskOperation: 'read', taskId: t.taskId, taskView: 'dependencies', ...conversationGuide(t) } };
 }
 function safeSnapshot(a, file) {
   const run = path.join(a.dir, 'run/source-snapshot'), target = path.resolve(run, file);
@@ -101,7 +139,7 @@ function artifact(t, a) {
   const retained = t.capabilities.filter(c => t.selected.includes(c.id)), excluded = t.capabilities.filter(c => !t.selected.includes(c.id));
   const common = { schema: 'fish-stomach-task-output/v1', taskId: t.taskId, revision: t.revision, mode: t.mode, analysisId: t.analysisId, plugin: t.plugin,
     source: t.source, classification: { candidate: t.classification, judgment: t.judgment }, retained, excluded,
-    dependencies: t.dependencies, completeness: t.completeness, unknowns: [...(t.analysisUnknowns ?? []), ...t.unknowns],
+    dependencies: t.dependencies, completeness: t.completeness, unknowns: [...(t.analysisUnknowns ?? []), ...t.unknowns], explanation: currentExplanation(t),
     scope: 'plugin-local; never overwrite fish global persona/memory/mood. Module closure does not prove required code. No probability or runtime safety claim.',
     evidence: [...new Set([...retained.flatMap(c => c.evidenceRefs), ...t.dependencies.flatMap(d => d.evidenceRefs)])].map(id => refOf(a.bundle.records.find(r => r.id === id))) };
   if (t.mode === 'compatibility') return { ...common, kind: 'compatibility-plan', status: '方案待确认/待执行',
@@ -122,32 +160,34 @@ export async function taskJob(args, scope, helpers) {
   const ok = result => ({ ok: true, action: 'task', result: { ...result, analyzerExecutions: 0 } });
   if (op === 'list') {
     const collection = args.taskView === 'analyses' ? ctx.root : root;
-    const rows = fs.existsSync(collection) ? fs.readdirSync(collection).flatMap(id => {
-      if (!/^[0-9a-f-]{36}$/.test(id)) return [];
-      try { const r = read(path.join(collection,id,args.taskView === 'analyses' ? 'record.json' : 'task.json')); if (r.profile !== ctx.profile) return [];
+    const kind = args.taskView === 'analyses' ? 'analysis' : 'task';
+    const rows = recordEntries(collection, kind).flatMap(({id,dir}) => {
+      try { const r = read(path.join(dir,kind === 'analysis' ? 'record.json' : 'task.json')); if (r.profile !== ctx.profile) return [];
         return [{ id, analysisId: r.analysisId, mode: r.mode ?? null, status: r.phase ?? r.status, source: r.source,
+          ...recordMetadata(r, dir, kind, ctx.root),
           ...(args.taskView === 'analyses' ? { kind: r.kind, initialAnalysisId: r.initialAnalysisId ?? null } : {}),
           verified: false, note: 'Validate on read/use; list is metadata only' }]; } catch { return []; }
-    }) : [];
+    }).sort((a,b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
     return ok({ page: page(rows, options) });
   }
   let t, dir, a;
   if (op === 'create') {
     if (!modes.includes(args.taskMode)) throw Error('Explicit compatibility/reverse required');
     a = await openTaskAnalysis(scope,args.analysisId);
-    const taskId = randomUUID(); dir = path.join(root,taskId);
+    const taskId = randomUUID(), plugin = sourcePlugin(path.join(a.dir,'run/source-snapshot'), a.rec.source.path); dir = newRecordDirectory(root,'task',taskId,plugin);
     // Avoid writing task outputs into the candidate tree, even for a broad local source.
     if (dir === a.rec.source.path || dir.startsWith(a.rec.source.path + path.sep)) throw Error('Task output must be outside source');
-    const manifest = path.join(a.dir,'run/source-snapshot/package.json'), pkg = fs.existsSync(manifest) ? read(manifest) : {};
     t = { schema:'fish-stomach-task/v1', taskId, profile:ctx.profile, binding:ctx.frameworkRoot, revision:1, mode:args.taskMode, phase:'selection-pending',
-      analysisId:args.analysisId, source:a.rec.source, plugin:{name:pkg.name ?? 'unknown',version:pkg.version ?? null}, classification:classification(a), judgment:null,
+      analysisId:args.analysisId, analysisKind:a.rec.kind, initialAnalysisId:a.rec.initialAnalysisId ?? null, source:a.rec.source, plugin, classification:classification(a), judgment:null,
       capabilities:candidates(a), selected:[], dependencies:[], analysisUnknowns:analysisUnknowns(a), unknowns:[], outputs:[], confirmation:null, completeness:a.summary.validity, createdAt:new Date().toISOString() };
     fs.mkdirSync(dir,{recursive:true}); writeJson(path.join(dir,'task.json'),t); return ok(overview(t));
   }
-  checkId(args.taskId); dir = path.join(root,args.taskId); t = read(path.join(dir,'task.json'));
+  checkId(args.taskId); dir = findRecordDirectory(root,'task',args.taskId); t = read(path.join(dir,'task.json'));
   if (t.taskId !== args.taskId || t.profile !== ctx.profile || t.binding !== ctx.frameworkRoot) throw Error('FH_TASK_SCOPE_MISMATCH');
   // Explicit new analysis resets all selections/judgments; stale source cannot be read as valid.
   a = await openTaskAnalysis(scope,op === 'update' && args.taskPatch?.analysisId ? args.taskPatch.analysisId : t.analysisId);
+  t.plugin = recordPlugin(t, dir, 'task', ctx.root);
+  t.analysisKind = a.rec.kind; t.initialAnalysisId = a.rec.initialAnalysisId ?? null;
   if (op === 'read') {
     const rows = args.taskView === 'capabilities' ? t.capabilities : args.taskView === 'dependencies' ? t.dependencies : args.taskView === 'unknowns' ? [...(t.analysisUnknowns ?? []), ...t.unknowns] : null;
     return ok(rows ? { taskId:t.taskId, revision:t.revision, completeness:t.completeness, page:page(rows,options) } : overview(t));
@@ -163,10 +203,10 @@ export async function taskJob(args, scope, helpers) {
     if (args.expectedRevision !== t.revision) throw Error('FH_TASK_REVISION_CONFLICT: refresh current task before mutation');
     if (op === 'update') {
       const p = args.taskPatch; if (!p || typeof p !== 'object' || Array.isArray(p)) throw Error('taskPatch required');
-      const allowed = ['mode','analysisId','selected','classification','addCapabilities','dependencyDecisions','unknowns'];
+      const allowed = ['mode','analysisId','selected','classification','addCapabilities','dependencyDecisions','unknowns','explanation'];
       if (Object.keys(p).some(k => !allowed.includes(k))) throw Error('Unknown task patch field');
       if (p.analysisId) { t.analysisId=p.analysisId; t.source=a.rec.source; t.capabilities=candidates(a);t.selected=[];t.dependencies=[];t.classification=classification(a);t.judgment=null;t.unknowns=[];t.analysisUnknowns=analysisUnknowns(a);t.completeness=a.summary.validity;
-        const manifest = path.join(a.dir,'run/source-snapshot/package.json'), pkg = fs.existsSync(manifest) ? read(manifest) : {};t.plugin={name:pkg.name ?? 'unknown',version:pkg.version ?? null}; }
+        t.plugin=sourcePlugin(path.join(a.dir,'run/source-snapshot'), a.rec.source.path); }
       if (p.mode) { if (!modes.includes(p.mode)) throw Error('Invalid task mode');t.mode=p.mode; }
       for (const c of p.addCapabilities ?? []) { const o=origin(c.origin), evidenceRefs=refs(c.evidenceRefs ?? [],a); if (!['tool','brain','unknown'].includes(c.category)) throw Error('Invalid capability category');t.capabilities.push({id:'supplement/'+randomUUID(),name:text(c.name,'capability name',160),category:c.category,origin:o,evidenceRefs}); }
       if (p.classification) { if(!categories.includes(p.classification.value))throw Error('Invalid classification');t.judgment={value:p.classification.value,origin:origin(p.classification.origin),evidenceRefs:refs(p.classification.evidenceRefs ?? [],a)}; }
@@ -180,7 +220,10 @@ export async function taskJob(args, scope, helpers) {
         if(target.acceptance && (target.kind!=='incidental-behavior'||o.kind!=='user'))throw Error('Incidental behavior requires separately attributed explicit user acceptance');
       }
       if(p.unknowns) {if(!Array.isArray(p.unknowns)||p.unknowns.length>80)throw Error('unknowns must be <=80 items');t.unknowns=p.unknowns.map(u=>({text:text(u.text,'unknown'),origin:origin(u.origin),evidenceRefs:refs(u.evidenceRefs ?? [],a)}));}
-      t.revision++;t.confirmation=null;t.phase='plan-pending';
+      // Explanatory annotations describe a plan revision, like produce/confirm;
+      // they do not change choices, approval or already written output files.
+      if (Object.keys(p).some(k => k !== 'explanation')) { t.revision++;t.confirmation=null;t.phase='plan-pending'; }
+      if (Object.hasOwn(p,'explanation')) t.explanation=explain(p.explanation,t,a);
     } else if(op === 'produce') {
       if(!t.selected.length)throw Error('Select at least one capability');
       const existing=t.outputs.find(o=>o.revision===t.revision);if(existing)return ok(overview(t));
@@ -193,6 +236,7 @@ export async function taskJob(args, scope, helpers) {
       t.phase=t.confirmation.origin.kind==='current-model'?'model-reviewed-awaiting-user':t.mode==='reverse'?'materials-confirmed':t.dependencies.some(d=>d.decision==='pending')?'confirmed-with-open-questions':'confirmed-awaiting-separate-execution';
     } else throw Error('taskOperation: list/create/read/update/produce/confirm/output');
     await openTaskAnalysis(scope,t.analysisId);
+    t.updatedAt=new Date().toISOString();
     const tmp=path.join(dir,'task.'+process.pid+'.tmp');writeJson(tmp,t);fs.renameSync(tmp,path.join(dir,'task.json'));return ok(overview(t));
   } finally {fs.closeSync(fd);fs.unlinkSync(path.join(dir,'operation.lock'));}
 }

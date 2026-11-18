@@ -1,9 +1,10 @@
 # fish-body（鱼的身体）
 
-## 胃任务（0.0.7-dev.1，分支测试版）
+## 胃任务（0.0.7-dev.2，分支测试版）
 
 本分支增加能力选择与两种产出；测试安装来源为 `github:2233heorbrin/fish-body#feat/stomach-split-tasks`，
-这些任务入口不属于此前正式标签 v0.0.6。真实日常页面和当前 DSH 对话的用户验收仍待完成；
+这些任务入口不属于此前正式标签 v0.0.6。dev.2 增加中文结果分组、具名选择和可读方案；
+dev.1 已有真实 DSH 工具调用与材料产出证据，新增中文交互的真实模型讨论及用户验收仍待完成；
 本地专项与隔离浏览器验证不代替用户裁定或日常验收。版本变化可使旧分析见证失效，保留旧结果并明确选择新分析，不改写旧见证。
 设置页的胃分区与现有 `fish_hand` 共用任务服务、Profile、身体绑定和关闭/closing 门禁。
 先显式 initial / deep 或选择已有有效 analysisId，再创建任务：
@@ -42,8 +43,25 @@ origin/evidenceRefs，可补 proposedChange 和 businessSemanticChange=yes|no|un
 并清空旧选择/判断；源码、Profile、绑定或实现见证失配拒绝旧结论。模型确认只记为模型意见，
 仍待用户确认；用户确认也不授权适配或部署。所有脑区行为限定插件作用域，不写鱼脑全局数据。
 
-页面不会自动请求模型；在当前 DSH 对话给出 taskId，通过 task read/update/produce/output
-讨论材料和记录选择。任务写入身体绑定根的 `鱼的胃/任务/<taskId>`，只存方案和材料；
+页面按插件显示名、初步/深入分析及时间选择结果，按插件、模式、时间和状态继续任务，
+无需手工填写内部编号。默认展示目标、保留/排除功能、模型建议、使用影响和下一步；
+编号、源码路径、证据、诊断和原始产出放入技术详情，按需分页读取。
+没有适用说明时显示“待当前 DSH 对话解释方案”，不伪造推荐。
+
+当前对话模型先核对必要证据，再解释功能并推荐取舍，只询问真正影响需求或行为的选择。
+`taskPatch.explanation` 可记录 `origin:{kind:"current-model",actor,reason}`、goal、
+recommendation、retained/excluded（capabilityId、可选 label、reason、evidenceRefs）、
+impacts（dependencyId、text、evidenceRefs）、questions（text、可选能力/依赖引用、evidenceRefs）、
+nextSteps 和 evidenceRefs。说明名是模型表述，不是程序自动发现的中文功能名。
+引用须属于当前分析，功能取舍须符合当前选择。说明绑定 analysisId 和当前方案 revision；
+模式、能力或相关判断变化后不再作为当前推荐显示。仅更新说明是对同一方案版本的注解，
+不推进方案 revision、不更改选择/决定/确认，也不重写已有产出；null 可清除说明。
+旧任务没有此字段仍可读取。模型归属为调用方声明，不代替用户真实接受。
+
+页面不会自动请求模型；“复制到当前 DSH 对话”仅复制定位和讨论提示，不发送消息或源码。
+通过 task read/update/produce/output 讨论材料和记录选择。
+新任务写入身体绑定根的 `鱼的胃/任务/<插件显示名>-拆分任务/<taskId>`，只存方案和材料；
+同一任务切换模式不变目录，旧的 `任务/<taskId>` 继续可列举、读写和引用，不迁移旧数据。
 程序及未来派生运行产物仍归鱼的手维护。当前没有执行适配/安装按钮，不改变原审批策略。
 
 ## 源码分析与按需取证（0.0.6）
@@ -91,7 +109,10 @@ origin/evidenceRefs，可补 proposedChange 和 businessSemanticChange=yes|no|un
 文件集合、逐文件内容及登记摘要（含分析器忽略的文件），再核对实际分析快照。
 材料或清单失配时明确拒绝，不重新采集、不改写登记或自动改走 local；复用、查询
 和关联初扫也沿用此检查。local 仍分析明确选择的当前目录，不要求采集清单。
-结果写入身体绑定根的 `鱼的胃/分析/<analysisId>`，记录完整 Profile 所属身份，
+新结果写入身体绑定根的 `鱼的胃/分析/<插件显示名>-分析结果/<analysisId>`；
+显示名优先使用插件清单已有名称，否则保留实际包名；Windows 必要字符处理只影响外层分组。
+同名插件和重复分析以内部唯一编号区分，不覆盖。新旧目录由同一定位实现读取；
+旧的 `分析/<analysisId>` 保持原位可用，不修改见证或为目录重扫。记录完整 Profile 所属身份，
 跨 Profile 拒绝读取。切换绑定不迁移旧结果。失效结果不能继续作为有效证据引用。
 
 固定依赖为 dependency-cruiser 18.8.0、ast-grep CLI 0.51.3、ts-morph 28.0.0。

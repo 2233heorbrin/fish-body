@@ -172,6 +172,10 @@ function installDataClient(React, ctx, component) {
 .fb-task-dep{padding:12px 0;border-bottom:1px solid var(--dsw-alias-border-l1,#e2e6ea)}.fb-task-dep p{margin:4px 0}
 .fb-task-output{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--dsw-alias-bg-layer-2,#f4f6f8);padding:12px;font-size:12px;max-height:480px;overflow:auto}
 .fb-tasks :focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6feb);outline-offset:2px}.fb-tasks button:disabled{opacity:.6;cursor:default}
+.fb-tasks summary{cursor:pointer;padding:8px 0;font-weight:600}.fb-task-technical{margin-top:24px;border-top:1px solid var(--dsw-alias-border-l1,#e2e6ea)}
+.fb-task-readable{margin-top:24px}.fb-task-readable h3{margin-bottom:8px}.fb-task-readable li{margin:8px 0}.fb-task-readable ul,.fb-task-readable ol{padding-inline-start:24px}
+.fb-tasks select{min-width:0}.fb-tasks fieldset{min-width:0;margin-inline:0}.fb-task-modes{padding:12px}.fb-tasks .fb-data-actions{align-items:center}
+@media(max-width:480px){.fb-detail{padding:14px}.fb-tasks .fb-data-actions{gap:8px}.fb-tasks .fb-tab{padding:8px 10px}.fb-task-modes{gap:12px}}
 `
 
     /* 统一风格线性图标：内联 SVG stroke，无图标库，文字标签始终保留。 */
@@ -199,101 +203,153 @@ function installDataClient(React, ctx, component) {
     }
 
     function StomachTasks() {
-      const [task, setTask] = useState(null), [caps, setCaps] = useState([]), [deps, setDeps] = useState(null)
-      const [analyses, setAnalyses] = useState([]), [analysisOffset, setAnalysisOffset] = useState(null)
-      const [analysisId, setAnalysisId] = useState(''), [taskId, setTaskId] = useState(''), [sourcePath, setSourcePath] = useState('')
-      const [initialId, setInitialId] = useState('')
-      const [mode, setMode] = useState('compatibility'), [busy, setBusy] = useState(false), [issue, setIssue] = useState('')
-      const [output, setOutput] = useState(null), [judgment, setJudgment] = useState('unknown'), [reason, setReason] = useState('')
-      const [unknowns, setUnknowns] = useState(null)
+      const [task, setTask] = useState(null), [caps, setCaps] = useState(null), [deps, setDeps] = useState(null), [unknowns, setUnknowns] = useState(null)
+      const [analyses, setAnalyses] = useState([]), [tasks, setTasks] = useState([]), [analysisOffset, setAnalysisOffset] = useState(null), [taskOffset, setTaskOffset] = useState(null)
+      const [analysisId, setAnalysisId] = useState(''), [taskId, setTaskId] = useState(''), [sourcePath, setSourcePath] = useState(''), [initialId, setInitialId] = useState('')
+      const [mode, setMode] = useState('compatibility'), [busy, setBusy] = useState(false), [issue, setIssue] = useState(''), [notice, setNotice] = useState('')
+      const [technical, setTechnical] = useState(false), [output, setOutput] = useState(null), [outputRevision, setOutputRevision] = useState('')
+      const [judgment, setJudgment] = useState('unknown'), [reason, setReason] = useState('')
       const [editing, setEditing] = useState(null), [decision, setDecision] = useState('pending'), [depReason, setDepReason] = useState('')
       const [change, setChange] = useState(''), [semantic, setSemantic] = useState('unknown'), [accept, setAccept] = useState(false)
-      const labels = { compatibility: '兼容拆分', reverse: '逆向拆分', tool: '工具类', brain: '脑区类', mixed: '混合类', unknown: 'unknown / 待判断',
-        'selection-pending': '待选择能力', 'plan-pending': '方案待讨论', 'plan-awaiting-confirmation': '方案待确认 / 待执行', 'materials-produced': '组件材料已产出（未解耦）',
-        'confirmed-with-open-questions': '已记录确认，仍有待定项', 'confirmed-awaiting-separate-execution': '已确认，执行另行授权', 'materials-confirmed': '组件材料已确认（未解耦）', 'model-reviewed-awaiting-user': '已记录模型意见，待用户确认',
-        implementation: '直接实现候选', 'shared-state-initialization': '共享服务、状态与初始化', 'lifecycle-release': '生命周期与释放', 'resources-programs': '资源与外部程序', 'incidental-behavior': '附带行为', 'unresolved-relation': '无法判断的关系',
-        pending: '待判断', retain: '保留', narrow: '收窄', exclude: '排除' }
+      const labels = { compatibility: '兼容拆分', reverse: '逆向拆分', tool: '工具类', brain: '脑区类', mixed: '混合类', unknown: '待判断',
+        'selection-pending': '待选择功能', 'plan-pending': '方案待讨论', 'plan-awaiting-confirmation': '方案待确认 / 待执行', 'materials-produced': '源码材料已产出',
+        'confirmed-with-open-questions': '已记录确认，仍有待定项', 'confirmed-awaiting-separate-execution': '已确认，执行另行授权', 'materials-confirmed': '源码材料已确认',
+        'model-reviewed-awaiting-user': '已记录模型意见，待用户确认', implementation: '直接实现候选', 'shared-state-initialization': '共享服务、状态与初始化',
+        'lifecycle-release': '生命周期与释放', 'resources-programs': '资源与外部程序', 'incidental-behavior': '附带行为', 'unresolved-relation': '无法判断的关系',
+        pending: '待判断', retain: '保留', narrow: '收窄', exclude: '排除', initial: '初步分析', deep: '深入分析', ready: '分析已完成', 'diagnostic-partial': '有诊断待核对' }
+      const nameOf = r => r?.plugin?.displayName || r?.plugin?.name || '未命名插件'
+      const timeOf = r => { const d = new Date(r?.updatedAt || r?.createdAt); return Number.isNaN(d.getTime()) ? '时间未记录' : d.toLocaleString('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) }
+      const analysisLabel = r => nameOf(r) + '｜' + (labels[r.kind] || '类型待核对') + '｜' + timeOf(r)
+      const taskLabel = r => nameOf(r) + '｜' + (labels[r.mode] || '模式待核对') + '｜' + timeOf(r) + '｜' + (labels[r.status] || r.status)
+      function recovery(error) {
+        if (/ID_INVALID|尚未选择/.test(error)) return '尚未选择分析结果或任务，请先从列表中选择。'
+        if (/REVISION_CONFLICT/.test(error)) return '任务已被更新，请刷新任务后再保存。'
+        if (/PROFILE_MISMATCH|SCOPE_MISMATCH|ROOT_RELOAD_REQUIRED/.test(error)) return '结果不属于当前 Profile 或数据绑定，请选择当前列表中的结果；绑定变更后需由用户重新加载身体。'
+        if (/INVALID|SOURCE_CHANGED|identity changed|source changed|fixed source content|not completed|valid initial/.test(error)) return '来源或结果已失效，请保留旧材料，明确选择有效的同源分析；如需新分析，请在高级操作中主动发起。'
+        if (/No output/.test(error)) return '当前版本尚未产出，请先生成方案或材料；也可在技术详情中选择已有产出版本。'
+        if (/at least one/.test(error)) return '请先选择至少一项要保留的功能，再生成方案或材料。'
+        if (/ENOENT/.test(error)) return '未找到结果，请刷新列表并重新选择，旧材料不会自动搬迁。'
+        if (/off|已关闭|closing|正在关闭/.test(error)) return '身体已关闭或正在收尾，请等待；需要开启时由用户操作原插件开关。'
+        if (/Failed to fetch|NetworkError/.test(error)) return '未能连接身体服务，请检查当前连接后重试。'
+        if (/[\u4e00-\u9fff]/.test(error)) return error
+        return '本次操作未完成。请刷新任务并核对选择；原始原因可在下方展开查看。'
+      }
       async function api(args, route = 'task') {
         const response = await fetch('/api/fish-hand/' + route, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(args) })
         const value = await response.json()
-        if (!response.ok || !value.ok) throw Error(value.error || value.result?.message || value.result?.validity?.reasons?.join('; ') || '结果失效，请刷新并明确选择新的分析。')
+        if (!response.ok || !value.ok) throw Error(value.error || value.message || value.result?.message || value.result?.validity?.reasons?.join('; ') || '结果不可用，请检查身体状态并选择有效分析。')
         return value.result
       }
-      async function run(fn) { if (busy) return; setBusy(true); setIssue(''); try { await fn() } catch (e) { setIssue(e.message) } finally { setBusy(false) } }
-      async function listAnalyses(offset = 0) {
-        const r = await api({ taskOperation: 'list', taskView: 'analyses', taskOptions: { offset, limit: 20 } })
-        setAnalyses(old => offset ? [...old, ...r.page.items] : r.page.items); setAnalysisOffset(r.page.nextOffset)
+      async function run(fn) { if (busy) return; setBusy(true); setIssue(''); setNotice(''); try { await fn() } catch (e) { setIssue(e.message) } finally { setBusy(false) } }
+      async function list(kind, offset = 0) {
+        const r = await api({ taskOperation: 'list', ...(kind === 'analyses' ? { taskView: 'analyses' } : {}), taskOptions: { offset, limit: 20 } })
+        const put = kind === 'analyses' ? setAnalyses : setTasks
+        put(old => offset ? [...old.filter(a => !r.page.items.some(b => a.id === b.id)), ...r.page.items] : r.page.items)
+        ;(kind === 'analyses' ? setAnalysisOffset : setTaskOffset)(r.page.nextOffset)
       }
-      function chooseAnalysis(id, result = analyses.find(a => a.id === id)) {
-        setAnalysisId(id)
-        setInitialId(result?.kind === 'initial' ? id : result?.kind === 'deep' ? result.initialAnalysisId || '' : '')
+      function chooseAnalysis(id, row = analyses.find(a => a.id === id)) {
+        setAnalysisId(id); setInitialId(row?.kind === 'initial' ? id : row?.kind === 'deep' ? row.initialAnalysisId || '' : '')
       }
-      useEffect(() => { run(() => listAnalyses()) }, [])
+      useEffect(() => { run(() => Promise.all([list('analyses'), list('tasks')])) }, [])
+      async function readPage(id, view, offset = 0) { return (await api({ taskOperation: 'read', taskId: id, taskView: view, taskOptions: { offset, limit: 5 } })).page }
       async function load(id) {
-        const t = await api({ taskOperation: 'read', taskId: id }); setTask(t); setTaskId(id); setMode(t.mode); chooseAnalysis(t.analysisId); setOutput(null)
+        if (!id) throw Error('尚未选择任务，请先从列表中选择。')
+        const t = await api({ taskOperation: 'read', taskId: id })
+        setTask(t); setTaskId(id); setMode(t.mode); chooseAnalysis(t.analysisId, { kind: t.analysisKind, initialAnalysisId: t.initialAnalysisId }); setOutput(null); setOutputRevision(''); setEditing(null)
         setJudgment(t.judgment?.value || 'unknown'); setReason(t.judgment?.origin?.reason || '')
-        const rows = []; let offset = 0
-        do { const r = await api({ taskOperation: 'read', taskId: id, taskView: 'capabilities', taskOptions: { offset, limit: 20 } }); rows.push(...r.page.items); offset = r.page.nextOffset } while (offset !== null)
-        setCaps(rows); setDeps((await api({ taskOperation: 'read', taskId: id, taskView: 'dependencies', taskOptions: { limit: 5 } })).page)
-        setUnknowns((await api({ taskOperation: 'read', taskId: id, taskView: 'unknowns', taskOptions: { limit: 5 } })).page)
+        setCaps(await readPage(id, 'capabilities')); setDeps(null); setUnknowns(null)
       }
-      async function update(patch) { const t = await api({ taskOperation: 'update', taskId: task.taskId, expectedRevision: task.revision, taskPatch: patch }); await load(t.taskId) }
+      async function update(patch) {
+        const t = await api({ taskOperation: 'update', taskId: task.taskId, expectedRevision: task.revision, taskPatch: patch })
+        await load(t.taskId); await list('tasks')
+      }
       const attribution = why => ({ kind: 'user', actor: '设置页使用者', reason: why })
       const button = (name, action) => h('button', { type: 'button', className: 'fb-tab', disabled: busy, onClick: () => run(action) }, name)
       const field = (name, value, change, placeholder = '') => h('label', { className: 'fb-task-field' }, name, h('input', { value, disabled: busy, placeholder, onChange: e => change(e.target.value) }))
-      const nav = (p, fetchPage) => p ? h('div', { className: 'fb-data-actions' }, h('span', null, p.total + ' 项 · 当前 ' + (p.offset + 1) + '–' + (p.offset + p.items.length)), p.offset > 0 ? button('上一页', () => fetchPage(Math.max(0, p.offset - p.limit))) : null, p.nextOffset !== null ? button('下一页', () => fetchPage(p.nextOffset)) : null) : null
-      const modeChoices = h('fieldset', { disabled: busy, className: 'fb-task-modes' }, h('legend', null, '任务模式'), ['compatibility', 'reverse'].map(m => h('label', { key: m }, h('input', { type: 'radio', name: 'stomach-mode', value: m, checked: mode === m, onChange: () => task ? run(() => update({ mode: m })) : setMode(m) }), labels[m])))
-      const readOutput = async offset => setOutput(await api({ taskOperation: 'output', taskId: task.taskId, taskOptions: { offset, limit: 5 } }))
-      return h('section', { className: 'fb-tasks', 'aria-label': '胃任务' },
-        h('h3', null, '能力选择与产出'),
-        h('p', { className: 'fb-note' }, '兼容模式形成统一派生插件的待确认方案；逆向模式提供组件源码和证据材料。本页不执行适配、不制作安装包、不安装，也不会调用模型。'),
+      const nav = (p, fetchPage) => p ? h('div', { className: 'fb-data-actions' }, h('span', null, p.total ? p.total + ' 项 · 当前 ' + (p.offset + 1) + '–' + (p.offset + p.items.length) : '暂无条目'), p.offset > 0 ? button('上一页', () => fetchPage(Math.max(0, p.offset - p.limit))) : null, p.nextOffset !== null ? button('下一页', () => fetchPage(p.nextOffset)) : null) : null
+      const explanation = task?.explanation
+      function featureList(key, title) {
+        const facts = task.features?.[key] || [], explained = explanation?.[key] || []
+        const rows = facts.map(f => ({ ...f, annotation: explained.find(e => e.capabilityId === f.id) }))
+        const total = key === 'retained' ? task.selected.length : task.features?.excludedCount || 0
+        return h('section', null, h('h4', null, title), rows.length ? h('ul', null, rows.map(f => h('li', { key: f.id }, f.annotation?.label || f.name, f.annotation ? h('p', { className: 'fb-note' }, '模型理由：' + f.annotation.reason) : null))) : h('p', { className: 'fb-note' }, key === 'retained' ? '尚未选择，请在下方勾选要保留的功能。' : '当前没有排除的功能候选。'), total > rows.length ? h('p', { className: 'fb-note' }, '共 ' + total + ' 项，完整功能请按下方分页查看。') : null)
+      }
+      async function readOutput(offset = 0, revision = outputRevision) { setOutput(await api({ taskOperation: 'output', taskId: task.taskId, ...(revision ? { outputRevision: Number(revision) } : {}), taskOptions: { offset, limit: 5 } })) }
+      const modeChoices = h('fieldset', { disabled: busy, className: 'fb-task-modes' }, h('legend', null, '任务模式'), ['compatibility', 'reverse'].map(m => h('label', { key: m }, h('input', { type: 'radio', name: 'stomach-mode', checked: mode === m, onChange: () => task ? run(() => update({ mode: m })) : setMode(m) }), labels[m])))
+      return h('section', { className: 'fb-tasks', 'aria-label': '胃任务', 'aria-busy': busy },
+        h('h3', null, '功能取舍与方案'),
+        h('p', { className: 'fb-note' }, '先选分析结果，再按功能讨论取舍。兼容模式产出待执行方案，逆向模式产出源码理解材料。'),
+        h('label', { className: 'fb-task-field' }, '继续已有任务', h('select', { value: tasks.some(a => a.id === taskId) ? taskId : '', disabled: busy, onChange: e => { const id = e.target.value; if (id) run(() => load(id)) } }, h('option', { value: '' }, '选择插件任务'), tasks.map(a => h('option', { key: a.id, value: a.id }, taskLabel(a))))),
+        taskOffset !== null ? button('更多任务', () => list('tasks', taskOffset)) : null,
+        h('label', { className: 'fb-task-field' }, '已有分析结果', h('select', { value: analyses.some(a => a.id === analysisId) ? analysisId : '', disabled: busy, onChange: e => chooseAnalysis(e.target.value) }, h('option', { value: '' }, '选择插件、分析类型和时间'), analyses.map(a => h('option', { key: a.id, value: a.id }, analysisLabel(a))))),
+        h('div', { className: 'fb-data-actions' }, button('刷新列表', () => Promise.all([list('analyses'), list('tasks')])), analysisOffset !== null ? button('更多分析结果', () => list('analyses', analysisOffset)) : null,
+          button('用所选分析新建任务', async () => { if (!analysisId) throw Error('尚未选择分析结果，请先从列表中选择。'); const r = await api({ taskOperation: 'create', analysisId, taskMode: mode }); await load(r.taskId); await list('tasks') })),
         modeChoices,
-        h('details', { open: !task }, h('summary', null, '分析来源与任务入口'),
-          h('label', { className: 'fb-task-field' }, '已有分析结果', h('select', { value: analyses.some(a => a.id === analysisId) ? analysisId : '', disabled: busy, onChange: e => chooseAnalysis(e.target.value) }, h('option', { value: '' }, '选择当前 Profile 的结果'), analyses.map(a => h('option', { key: a.id, value: a.id }, a.id + ' · ' + (a.kind || 'unknown') + ' · ' + a.status)))),
-          analysisOffset !== null ? button('更多分析结果', () => listAnalyses(analysisOffset)) : null,
-          field('任务分析结果 analysisId', analysisId, chooseAnalysis, '用于创建任务，可选择 initial 或 deep'),
-          h('label', { className: 'fb-task-field' }, '深查关联的 initial 初扫', h('select', { value: initialId, disabled: busy, onChange: e => setInitialId(e.target.value) },
-            h('option', { value: '' }, '请明确选择同源 initial 结果'),
-            initialId && !analyses.some(a => a.kind === 'initial' && a.id === initialId) ? h('option', { value: initialId }, initialId + ' · 已明确关联的 initial') : null,
-            analyses.filter(a => a.kind === 'initial').map(a => h('option', { key: a.id, value: a.id }, a.id + ' · initial')))),
-          h('p', { className: 'fb-note' }, initialId ? '深查使用上方明确的初扫关联；后端仍校验来源及有效性。任务结果可独立选择 initial 或 deep。' : '尚未确定初扫关联：请在上方选择同源 initial（可加载更多结果），或先明确源码并点击 initial 初扫。查看结果不会自动扫描。'),
-          field('明确源码目录', sourcePath, setSourcePath, '源码目录绝对路径，仅只读分析'),
-          h('div', { className: 'fb-data-actions' }, button('开始 initial 初扫', async () => { const r = await api({ action: 'analyze', analysisType: 'initial', analysisSource: { kind: 'local', path: sourcePath } }, 'analysis'); chooseAnalysis(r.analysisId, r); await listAnalyses() }),
-            button('显式 deep 深查', async () => { if (!initialId) throw Error('请先明确选择同源 initial 初扫结果；不会自动重新扫描。'); const r = await api({ action: 'analyze', analysisType: 'deep', analysisSource: { kind: 'local', path: sourcePath }, initialAnalysisId: initialId }, 'analysis'); chooseAnalysis(r.analysisId, r); await listAnalyses() }),
-            button('创建任务', async () => { const r = await api({ taskOperation: 'create', analysisId, taskMode: mode }); await load(r.taskId) })),
-          field('任务 ID', taskId, setTaskId), button('读取任务', () => load(taskId))),
-        busy ? h('p', { role: 'status' }, '正在处理…') : null,
-        issue ? h('p', { className: 'fb-error', role: 'alert' }, issue) : null,
-        task ? h('div', null,
-          h('p', { className: 'fb-path' }, task.taskId + ' · 版本 ' + task.revision),
+        busy ? h('p', { role: 'status' }, '正在处理，请稍候…') : null,
+        notice ? h('p', { role: 'status' }, notice) : null,
+        issue ? h('div', null, h('p', { className: 'fb-error', role: 'alert' }, recovery(issue)), h('details', null, h('summary', null, '原始错误详情'), h('pre', { className: 'fb-task-output' }, issue))) : null,
+        task ? h('div', { className: 'fb-task-readable' },
+          h('h3', null, nameOf(task)),
           h('p', { role: 'status', 'aria-live': 'polite' }, labels[task.phase] || task.phase),
           button('刷新任务', () => load(task.taskId)),
-          h('h4', null, '整体分类'),
-          h('p', null, '程序候选：' + labels[task.classification.value] + '（未确认）'), h('p', { className: 'fb-note' }, task.classification.reason),
-          h('p', { className: 'fb-path' }, '依据：' + task.classification.evidenceRefs.join(', ')),
-          h('p', null, task.judgment ? '已记录判断：' + labels[task.judgment.value] + ' · ' + task.judgment.origin.kind : '模型 / 用户判断待讨论'),
-          h('label', { className: 'fb-task-field' }, '用户分类判断', h('select', { value: judgment, disabled: busy, onChange: e => setJudgment(e.target.value) }, ['unknown', 'tool', 'brain', 'mixed'].map(v => h('option', { key: v, value: v }, labels[v])))),
-          field('判断理由', reason, setReason), button('记录用户判断', () => update({ classification: { value: judgment, origin: attribution(reason), evidenceRefs: task.classification.evidenceRefs } })),
-          h('h4', null, '选择保留能力'),
-          caps.length ? caps.map(c => h('label', { key: c.id, className: 'fb-task-cap' }, h('input', { type: 'checkbox', checked: task.selected.includes(c.id), disabled: busy, onChange: e => { const checked = e.target.checked; run(() => update({ selected: checked ? [...task.selected, c.id] : task.selected.filter(id => id !== c.id) })) } }), c.name + ' · ' + c.category + ' · ' + c.origin.kind, h('small', null, c.id + ' / ' + c.evidenceRefs.join(', ')))) : h('p', null, '没有自动识别的能力；可在当前对话补充有来源的能力，不默认当作工具类。'),
-          h('h4', null, '依赖与待定项'), h('p', { className: 'fb-note' }, '模块闭包只是候选范围。共享服务、any 或 unknown 都需要具体讨论，不自动判定必须保留、删除或无法拆分。'),
-          deps?.items.map(d => h('div', { key: d.id, className: 'fb-task-dep' }, h('strong', null, labels[d.kind] + ' · ' + labels[d.decision]), h('p', null, d.rationale), h('small', null, d.id + ' · 引用 ' + d.evidenceRefs.join(', ') + (d.scope.truncated ? ' · 证据有截断，使用 query 分页读取' : '')),
-            button('编辑依赖决定', async () => { setEditing(d.id); setDecision(d.decision); setDepReason(d.rationale); setChange(d.proposedChange || ''); setSemantic(d.businessSemanticChange); setAccept(false) }))),
-          nav(deps, async offset => setDeps((await api({ taskOperation: 'read', taskId: task.taskId, taskView: 'dependencies', taskOptions: { offset, limit: 5 } })).page)),
-          editing ? h('fieldset', { disabled: busy }, h('legend', null, '依赖决定 · ' + editing), h('select', { 'aria-label': '处理决定', value: decision, onChange: e => setDecision(e.target.value) }, ['pending', 'retain', 'narrow', 'exclude'].map(v => h('option', { key: v, value: v }, labels[v]))), field('决定理由', depReason, setDepReason), field('拟调整接线（未执行）', change, setChange),
-            h('label', null, '业务语义变化', h('select', { value: semantic, onChange: e => setSemantic(e.target.value) }, ['unknown', 'yes', 'no'].map(v => h('option', { key: v, value: v }, v)))),
-            editing.endsWith(':D5') ? h('label', null, h('input', { type: 'checkbox', checked: accept, onChange: e => setAccept(e.target.checked) }), '明确接受本条理由中说明的附带行为') : null,
-            button('保存依赖决定', async () => { await update({ dependencyDecisions: [{ id: editing, decision, rationale: depReason, origin: attribution(depReason), proposedChange: change, businessSemanticChange: semantic, acceptIncidental: accept, ...(accept ? { acceptanceReason: depReason } : {}) }] }); setEditing(null) })) : null,
-          h('details', null, h('summary', null, '待定项 · ' + task.unknownCount), unknowns?.items.map((u, i) => h('p', { key: i }, u.text + ' · ' + u.origin.kind + ' · ' + u.evidenceRefs.join(', '))), nav(unknowns, async offset => setUnknowns((await api({ taskOperation: 'read', taskId: task.taskId, taskView: 'unknowns', taskOptions: { offset, limit: 5 } })).page))),
-          h('p', { className: 'fb-note' }, '诊断：' + JSON.stringify(task.completeness.runs.map(r => ({ run: r.name, ...r.completeness })))),
-          h('p', { className: 'fb-note' }, '当前对话可用 fish_hand action=task，taskId=' + task.taskId + ' 读取 / 补充判断；更新需 expectedRevision=' + task.revision + '。原始证据用 action=query、analysisId=' + task.analysisId + ' 分页读取。页面不会代替模型作出判断。'),
-          h('div', { className: 'fb-data-actions' }, button(task.mode === 'compatibility' ? '生成兼容方案' : '生成逆向材料', async () => { await api({ taskOperation: 'produce', taskId: task.taskId, expectedRevision: task.revision }); await load(task.taskId); await readOutput(0) }),
-            button('读取当前产出', () => readOutput(0)), button('确认当前方案版本', async () => { const why = reason.trim(); if (!why) throw Error('请填写本次确认理由；确认不代表部署授权。'); await api({ taskOperation: 'confirm', taskId: task.taskId, expectedRevision: task.revision, taskConfirmation: attribution(why) }); await load(task.taskId) })),
-          h('p', { className: 'fb-note' }, '变更模式、能力或内容会使原确认失效，旧产出保留。确认仅针对当前版本；适配和安装尚未开放。'),
-          task.outputs.map(o => h('p', { key: o.revision, className: 'fb-path' }, '版本 ' + o.revision + ' · ' + o.kind + ' · ' + o.path)),
-          output ? h('section', { 'aria-label': '产出内容' }, h('h4', null, '产出内容'), h('pre', { className: 'fb-task-output' }, JSON.stringify(output.page.items, null, 2)), nav(output.page, readOutput)) : null) : null)
+          h('h4', null, '当前目标'), h('p', null, explanation?.goal || '待当前 DSH 对话了解你的功能目标。当前模式：' + labels[task.mode] + '。'),
+          h('p', { className: 'fb-note' }, '整体分类：' + labels[task.classification.value] + '（程序候选，尚非语义结论）' + (task.judgment ? '；已记录' + (task.judgment.origin.kind === 'current-model' ? '模型' : '用户') + '判断：' + labels[task.judgment.value] : '；待当前对话讨论。')),
+          featureList('retained', '当前保留的功能'), featureList('excluded', '计划排除的功能'),
+          h('h4', null, '模型推荐及理由'),
+          explanation ? h('div', null, h('p', null, explanation.recommendation), h('p', { className: 'fb-note' }, '当前模型说明 · ' + explanation.origin.actor + '（调用方声明归属，不代表用户已接受）'))
+            : h('p', null, task.explanationState === 'stale' ? '任务内容已改变，旧说明不再适用。待当前 DSH 对话重新解释方案。' : '待当前 DSH 对话解释方案。已有选择和分析事实如下，页面不会代替模型推荐。'),
+          button('复制到当前 DSH 对话', async () => { if (!navigator.clipboard?.writeText) throw Error('浏览器未开放复制权限，请在技术详情中复制讨论提示。'); await navigator.clipboard.writeText(task.conversation.prompt); setNotice('讨论提示已复制，请粘贴到当前 DSH 对话；尚未发送。') }),
+          h('h4', null, '使用影响与待选问题'),
+          explanation ? h('div', null, h('ul', null, explanation.impacts.map((x, i) => h('li', { key: 'i' + i }, x.text))), explanation.questions.length ? h('ul', null, explanation.questions.map((x, i) => h('li', { key: 'q' + i }, x.text))) : h('p', { className: 'fb-note' }, '模型未提出额外问题；这不表示依赖已获得用户确认。'))
+            : h('p', null, '依赖中有 ' + task.counts.pending + ' 项待判断。请让当前对话先核对相关证据，再讨论真正影响使用的取舍。'),
+          h('h4', null, '当前进度与下一步'),
+          explanation?.nextSteps?.length ? h('ol', null, explanation.nextSteps.map((x, i) => h('li', { key: i }, x))) : h('p', null, '先讨论并记录功能取舍，再形成' + (task.mode === 'compatibility' ? '兼容方案；适配、验证、打包和安装另行处理。' : '源码材料；独立化和新插件开发另行处理。')),
+          h('p', { className: 'fb-note' }, task.outputs.length ? '已保留 ' + task.outputs.length + ' 份历史产出。确认仅针对具体方案版本，不授予执行或安装权限。' : '当前尚未产出方案或材料。'),
+          h('h4', null, '选择保留功能'),
+          caps?.items.length ? caps.items.map(c => h('label', { key: c.id, className: 'fb-task-cap' }, h('input', { type: 'checkbox', checked: task.selected.includes(c.id), disabled: busy, onChange: e => { const checked = e.target.checked; run(() => update({ selected: checked ? [...task.selected, c.id] : task.selected.filter(id => id !== c.id) })) } }), c.name, h('small', null, labels[c.category] + ' · ' + (c.origin.kind === 'program' ? '程序候选，待解释' : c.origin.kind === 'current-model' ? '模型补充' : '用户补充')))) : h('p', null, '没有自动识别的功能；可由当前对话核对证据并补充，不默认当作工具类。'),
+          nav(caps, async offset => setCaps(await readPage(task.taskId, 'capabilities', offset))),
+          h('div', { className: 'fb-data-actions' }, button(task.mode === 'compatibility' ? '生成兼容方案' : '生成逆向材料', async () => { await api({ taskOperation: 'produce', taskId: task.taskId, expectedRevision: task.revision }); await load(task.taskId); await list('tasks') })),
+          h('p', { className: 'fb-note' }, '功能、模式或相关决定改变后，原确认失效，旧产出保留。此处不执行适配、不生成安装包，也不运行源码。')) : null,
+        h('details', { className: 'fb-task-technical', open: technical, onToggle: e => { const open = e.currentTarget.open; setTechnical(open); if (open && task && !deps && !busy) run(async () => { setDeps(await readPage(task.taskId, 'dependencies')); setUnknowns(await readPage(task.taskId, 'unknowns')) }) } },
+          h('summary', null, '技术详情 / 高级操作'),
+          h('h4', null, '分析新源码（只读，不执行）'),
+          field('待分析插件源码文件夹', sourcePath, setSourcePath, '明确的源码目录绝对路径'),
+          h('label', { className: 'fb-task-field' }, '深入分析关联的初步分析', h('select', { value: initialId, disabled: busy, onChange: e => setInitialId(e.target.value) }, h('option', { value: '' }, '请选择同源初步分析'),
+            initialId && !analyses.some(a => a.id === initialId && a.kind === 'initial') ? h('option', { value: initialId }, '已明确关联的初步分析（后端仍核验）') : null,
+            analyses.filter(a => a.kind === 'initial').map(a => h('option', { key: a.id, value: a.id }, analysisLabel(a))))),
+          h('p', { className: 'fb-note' }, initialId ? '已记录明确初扫关联。深入分析不会把当前 deep 结果作为 initial。' : '请先明确选择同源初步分析；查看结果不扫描，也不会自动任选初扫。'),
+          h('div', { className: 'fb-data-actions' }, button('开始初步分析', async () => { if (!sourcePath.trim()) throw Error('请填写待分析插件源码文件夹；仅静态分析，不运行插件。'); const r = await api({ action: 'analyze', analysisType: 'initial', analysisSource: { kind: 'local', path: sourcePath } }, 'analysis'); chooseAnalysis(r.analysisId, r); await list('analyses') }),
+            button('深入分析（显式）', async () => { if (!initialId) throw Error('尚未确定初扫关联，请先选择同源初步分析；不会自动重新扫描。'); if (!sourcePath.trim()) throw Error('请填写待分析插件源码文件夹，后端将核对它与初扫同源。'); const r = await api({ action: 'analyze', analysisType: 'deep', analysisSource: { kind: 'local', path: sourcePath }, initialAnalysisId: initialId }, 'analysis'); chooseAnalysis(r.analysisId, r); await list('analyses') })),
+          field('分析结果内部编号', analysisId, chooseAnalysis), field('任务内部编号', taskId, setTaskId), button('按编号读取任务', () => load(taskId)),
+          task ? h('div', null,
+            h('p', { className: 'fb-path' }, '任务 ' + task.taskId + ' · 方案版本 ' + task.revision + ' · 分析 ' + task.analysisId),
+            h('p', null, task.classification.reason), h('p', { className: 'fb-path' }, '分类依据：' + task.classification.evidenceRefs.join(', ')),
+            h('label', { className: 'fb-task-field' }, '用户分类判断', h('select', { value: judgment, disabled: busy, onChange: e => setJudgment(e.target.value) }, ['unknown', 'tool', 'brain', 'mixed'].map(v => h('option', { key: v, value: v }, labels[v])))),
+            field('判断或确认理由', reason, setReason),
+            h('div', { className: 'fb-data-actions' }, button('记录用户判断', () => update({ classification: { value: judgment, origin: attribution(reason), evidenceRefs: task.classification.evidenceRefs } })),
+              button('确认当前方案版本', async () => { if (!reason.trim()) throw Error('请填写本次确认理由；确认不代表部署授权。'); await api({ taskOperation: 'confirm', taskId: task.taskId, expectedRevision: task.revision, taskConfirmation: attribution(reason) }); await load(task.taskId) })),
+            h('h4', null, '依赖决定与证据'),
+            button('刷新技术分页', async () => { setDeps(await readPage(task.taskId, 'dependencies')); setUnknowns(await readPage(task.taskId, 'unknowns')) }),
+            deps?.items.map(d => h('div', { key: d.id, className: 'fb-task-dep' }, h('strong', null, labels[d.kind] + ' · ' + labels[d.decision]), h('p', null, d.rationale), h('small', null, d.id + ' · ' + d.evidenceRefs.join(', ') + (d.scope.truncated ? ' · 候选证据截断，请用 query 分页核对' : '')),
+              button('编辑依赖决定', async () => { setEditing(d.id); setDecision(d.decision); setDepReason(d.rationale); setChange(d.proposedChange || ''); setSemantic(d.businessSemanticChange); setAccept(false) }))),
+            nav(deps, async offset => setDeps(await readPage(task.taskId, 'dependencies', offset))),
+            editing ? h('fieldset', { disabled: busy }, h('legend', null, '依赖决定 · ' + editing),
+              h('label', null, '处理决定', h('select', { value: decision, onChange: e => setDecision(e.target.value) }, ['pending', 'retain', 'narrow', 'exclude'].map(v => h('option', { key: v, value: v }, labels[v])))),
+              field('决定理由', depReason, setDepReason), field('拟调整接线（未执行）', change, setChange),
+              h('label', null, '业务语义变化', h('select', { value: semantic, onChange: e => setSemantic(e.target.value) }, ['unknown', 'yes', 'no'].map(v => h('option', { key: v, value: v }, { unknown: '待判断', yes: '涉及变化', no: '不涉及变化' }[v])))),
+              editing.endsWith(':D5') ? h('label', null, h('input', { type: 'checkbox', checked: accept, onChange: e => setAccept(e.target.checked) }), '明确接受本条理由中说明的附带行为') : null,
+              button('保存依赖决定', async () => { await update({ dependencyDecisions: [{ id: editing, decision, rationale: depReason, origin: attribution(depReason), proposedChange: change, businessSemanticChange: semantic, acceptIncidental: accept, ...(accept ? { acceptanceReason: depReason } : {}) }] }); setEditing(null) })) : null,
+            h('h4', null, '完整待定项（分页）'),
+            unknowns?.items.map((u, i) => h('p', { key: i }, u.text + ' · ' + u.origin.kind + ' · ' + u.evidenceRefs.join(', '))),
+            nav(unknowns, async offset => setUnknowns(await readPage(task.taskId, 'unknowns', offset))),
+            h('details', null, h('summary', null, '来源、有效性与分析诊断'), h('pre', { className: 'fb-task-output' }, JSON.stringify({ source: task.source, completeness: task.completeness, capabilities: caps?.items, confirmation: task.confirmation }, null, 2))),
+            h('details', null, h('summary', null, '讨论提示（仅复制，不发送）'), h('p', null, task.conversation.prompt)),
+            h('h4', null, '当前及历史产出（按需读取）'),
+            h('label', { className: 'fb-task-field' }, '产出版本', h('select', { value: outputRevision, onChange: e => { setOutputRevision(e.target.value); setOutput(null) } }, h('option', { value: '' }, '当前方案版本'), task.outputs.map(o => h('option', { key: o.revision, value: o.revision }, '版本 ' + o.revision + ' · ' + (o.mode === 'compatibility' ? '兼容方案' : '逆向材料'))))),
+            button('读取产出详情', () => readOutput()),
+            task.outputs.map(o => h('p', { key: o.revision, className: 'fb-path' }, '版本 ' + o.revision + ' · ' + o.path)),
+            output ? h('section', { 'aria-label': '产出技术内容' }, h('p', null, output.historical ? '历史产出，不能冒充当前方案。' : '当前版本产出'), h('pre', { className: 'fb-task-output' }, JSON.stringify(output.page.items, null, 2)), nav(output.page, offset => readOutput(offset))) : null) : null))
     }
-
     function FishBodySection() {
       const [sections, setSections] = useState(null)
       const [loadError, setLoadError] = useState(null)

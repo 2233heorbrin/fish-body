@@ -3,19 +3,22 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { randomUUID } from 'node:crypto';
 const install=process.env.FISH_TEST_INSTALL_ROOT, work=process.env.FISH_TASK_TEST_ROOT;
 if(!install||!work||fs.existsSync(work))throw Error('Provide installed package and fresh FISH_TASK_TEST_ROOT');
 const pkg=path.join(install,'node_modules/fish-body');
 const load=f=>import(pathToFileURL(path.join(pkg,f)));
 const {fishHandToolDefinition,createHandler}=await load('internal/backend/fish-body-approval.mjs');
 const phase=await load('internal/backend/lib/body-switch.mjs');
+const {findRecordDirectory,recordEntries,directoryLabel,sourcePlugin}=await load('internal/analysis/records.mjs');
+const analysisDir=id=>findRecordDirectory(root+'/鱼的胃/分析','analysis',id);
 const write=(f,v)=>{fs.mkdirSync(path.dirname(f),{recursive:true});fs.writeFileSync(f,v)};
 const json=(f,v)=>write(f,JSON.stringify(v,null,2));
 const read=f=>JSON.parse(fs.readFileSync(f,'utf8'));
 const root=path.join(work,'root'),profile=path.join(work,'profile'),source=path.join(work,'source'),marker=path.join(work,'EXECUTED');
 const select=on=>json(profile+'/package.json',{dependencies:{'fish-body':'file:test'},dsh:{profile:{bundles:on?['fish-body']:[]}}});select(true);
 const brain=root+'/鱼的大脑/人格/private.txt';write(brain,'PRIVATE_SENTINEL');
-json(source+'/package.json',{name:'synthetic-mixed',version:'1.0.0',type:'module',scripts:{prepare:'node trap.cjs'}});
+json(source+'/package.json',{name:'synthetic-mixed',displayName:'合成混合插件',version:'1.0.0',type:'module',scripts:{prepare:'node trap.cjs'}});
 write(source+'/trap.cjs',`require('node:fs').writeFileSync(${JSON.stringify(marker)},'trap')`);
 write(source+'/index.js',`import './trap.cjs';
 export function apply(ctx){
@@ -48,7 +51,7 @@ test('task flows from actual packed analysis through shared HTTP/tool state',asy
  t=await task('confirm',{taskId:t.taskId,expectedRevision:t.revision,taskConfirmation:origin});assert.equal(t.confirmation.revision,t.revision);assert.equal(t.phase,'confirmed-with-open-questions');
  const old=t.revision;await update({mode:'reverse'});assert.equal(t.confirmation,null);assert.equal(t.outputs[0].revision,old);
  t=await task('produce',{taskId:t.taskId,expectedRevision:t.revision});reverse=read(t.outputs.at(-1).path);assert.equal(reverse.kind,'reverse-materials');assert.equal(reverse.runnablePlugin,false);assert(reverse.fragments.some(f=>f.content.includes('selected_tool')));
- const bundle=read(root+'/鱼的胃/分析/'+analysis.analysisId+'/bundle/bundle.json');
+ const bundle=read(analysisDir(analysis.analysisId)+'/bundle/bundle.json');
  for(const f of reverse.fragments.filter(f=>f.content)){const actual=fs.readFileSync(source+'/'+f.file,'utf8').split(/\r?\n/).slice(f.startLine-1,f.endLine).join('\n');assert.equal(f.content,actual);assert(f.evidenceRefs.length);
    for(const id of f.evidenceRefs){const r=bundle.records.find(r=>r.id===id),coord=r.coordinate?.file?r.coordinate:{file:r.detail.file,line:r.detail.line};assert.equal(coord.file,f.file);assert(coord.line>=f.startLine&&coord.line<=f.endLine,'Fragment evidence must point at its actual source range');}
  }
@@ -60,7 +63,7 @@ test('dependency evidence survives unrelated updates, explicit replacement and a
  const rows=async()=> (await task('read',{taskId:x.taskId,taskView:'dependencies',taskOptions:{limit:20}})).page.items;
  const caps=(await task('read',{taskId:x.taskId,taskView:'capabilities'})).page.items;
  await step({selected:[caps.find(c=>c.name==='selected_tool').id]});
- const ds=await rows(),d=ds[0],bundle=read(root+'/鱼的胃/分析/'+analysis.analysisId+'/bundle/bundle.json');
+ const ds=await rows(),d=ds[0],bundle=read(analysisDir(analysis.analysisId)+'/bundle/bundle.json');
  const extra=bundle.records.find(r=>!d.evidenceRefs.includes(r.id));assert(extra,'Need real evidence outside default candidate set');
  const decision={id:d.id,decision:'narrow',rationale:'Synthetic decision with supplementary source evidence',origin,evidenceRefs:[extra.id],proposedChange:'Discuss narrower registration',businessSemanticChange:'unknown'};
  await step({dependencyDecisions:[decision],classification:{value:'mixed',origin,evidenceRefs:[]}});
@@ -76,13 +79,86 @@ test('dependency evidence survives unrelated updates, explicit replacement and a
  await assert.rejects(step({dependencyDecisions:[{...decision,evidenceRefs:['not-an-evidence-id']}]}),/Unknown evidence ID/);
  sharedDeep=await call({action:'analyze',analysisType:'deep',analysisSource:{kind:'local',path:source},initialAnalysisId:analysis.analysisId});
  assert.equal(sharedDeep.initialAnalysisId,analysis.analysisId);
- const db=read(root+'/鱼的胃/分析/'+sharedDeep.analysisId+'/bundle/bundle.json'),foreign=db.records.find(r=>r.id.startsWith('deep/'));assert(foreign);
+ const db=read(analysisDir(sharedDeep.analysisId)+'/bundle/bundle.json'),foreign=db.records.find(r=>r.id.startsWith('deep/'));assert(foreign);
  await assert.rejects(step({dependencyDecisions:[{...decision,evidenceRefs:[foreign.id]}]}),/Unknown evidence ID/);
  assert.deepEqual((await rows())[0].evidenceRefs,[extra.id]);
  const metadata=await task('list',{taskView:'analyses',taskOptions:{limit:20}});assert.equal(metadata.page.items.find(r=>r.id===analysis.analysisId).kind,'initial');assert.equal(metadata.page.items.find(r=>r.id===sharedDeep.analysisId).kind,'deep');assert.equal(metadata.page.items.find(r=>r.id===sharedDeep.analysisId).initialAnalysisId,analysis.analysisId);
  await assert.rejects(call({action:'analyze',analysisType:'deep',analysisSource:{kind:'local',path:source},initialAnalysisId:sharedDeep.analysisId}),/valid initial/);
  await step({analysisId:sharedDeep.analysisId});assert.equal(x.judgment,null);assert.deepEqual(x.selected,[]);assert.deepEqual(await rows(),[]);assert(old.equals(fs.readFileSync(x.outputs[0].path)));
  json(work+'/evidence-preservation.json',{defaultRefs:d.evidenceRefs,supplementalRef:extra.id,snapshots,explicitRemoval:[],foreignRejected:foreign.id,analysisReset:x,oldOutputUnchanged:true});
+});
+test('readable current-model explanation shares state, validates references and expires with plan changes',async()=>{
+ let x=await task('create',{analysisId:analysis.analysisId,taskMode:'compatibility'});
+ const step=async p=>x=await task('update',{taskId:x.taskId,expectedRevision:x.revision,taskPatch:p});
+ const cs=(await task('read',{taskId:x.taskId,taskView:'capabilities',taskOptions:{limit:20}})).page.items;
+ const c=cs.find(c=>c.name==='selected_tool'), excluded=cs.find(row=>row.id!==c.id);
+ await step({selected:[c.id],classification:{value:'mixed',origin,evidenceRefs:[]}});
+ const ds=(await task('read',{taskId:x.taskId,taskView:'dependencies'})).page.items;
+ const model={kind:'current-model',actor:'合成说明夹具（非真实模型）',reason:'仅验证页面及持久化，不代表真实讨论'};
+ const explanation={origin:model,goal:'合成目标：保留选定工具，讨论共享状态的影响',recommendation:'建议先保留工具入口，核对共享状态与提示贡献后再决定范围。',
+   retained:[{capabilityId:c.id,label:'合成工具说明',reason:'与合成目标对应',evidenceRefs:c.evidenceRefs}],
+   excluded:excluded?[{capabilityId:excluded.id,reason:'尚未选择，待讨论',evidenceRefs:[]}]:[],
+   impacts:[{dependencyId:ds[1].id,text:'共享状态范围可能影响启动与隔离，需要核对。',evidenceRefs:ds[1].evidenceRefs}],
+   questions:[{text:'是否需要保留提示贡献带来的行为？',dependencyId:ds[4].id}],
+   nextSteps:['讨论依赖取舍','后续另行适配与验证，当前不安装'],evidenceRefs:c.evidenceRefs};
+ const revision=x.revision;
+ await step({explanation});assert.equal(x.revision,revision);assert.equal(x.explanation.origin.kind,'current-model');assert.equal(x.explanationState,'current');
+ const viaHttp=await rest({taskOperation:'read',taskId:x.taskId});assert.deepEqual(viaHttp.value.result.explanation,x.explanation);
+ assert.match(tool.description,/自然语言/);assert.match(x.conversation.prompt,/解释/);
+ x=await task('produce',{taskId:x.taskId,expectedRevision:x.revision});const artifactBytes=fs.readFileSync(x.outputs.at(-1).path);
+ assert.equal(read(x.outputs.at(-1).path).explanation.goal,explanation.goal);
+ x=await task('confirm',{taskId:x.taskId,expectedRevision:x.revision,taskConfirmation:origin});const confirmation=x.confirmation;
+ await step({explanation:{...explanation,recommendation:'合成修订说明，仍针对相同方案。'}});
+ assert.equal(x.revision,revision);assert.deepEqual(x.confirmation,confirmation);assert(artifactBytes.equals(fs.readFileSync(x.outputs.at(-1).path)));
+ for(const bad of [{...explanation,origin},{...explanation,evidenceRefs:['deep/not-current']},{...explanation,retained:[{capabilityId:excluded?.id||'invalid',reason:'invalid'}]},{...explanation,impacts:[{dependencyId:'foreign',text:'invalid'}]}])
+   await assert.rejects(step({explanation:bad}),/current-model|Unknown evidence|不一致|之外/);
+ const states=[];
+ for(const patch of [{mode:'reverse'},{classification:{value:'unknown',origin,evidenceRefs:[]}},{dependencyDecisions:[{id:ds[0].id,decision:'narrow',rationale:'Synthetic narrowing',origin}]},{selected:[]}]){
+   await step(patch);assert.equal(x.explanation,null);assert.equal(x.explanationState,'stale');assert.equal(x.confirmation,null);states.push({patch,revision:x.revision,state:x.explanationState});
+   if(patch.selected) await step({selected:[c.id]});
+   await step({explanation});assert.equal(x.explanationState,'current');
+ }
+ await step({analysisId:sharedDeep.analysisId});assert.equal(x.explanation,null);assert.deepEqual(x.selected,[]);assert.equal(x.judgment,null);
+ await step({explanation:null});assert.equal(x.explanationState,'missing');
+ assert(artifactBytes.equals(fs.readFileSync(x.outputs.at(-1).path)));
+ json(work+'/readable-explanation.json',{synthetic:true,explanation,viaHttp:viaHttp.value.result,states,confirmationPreservedByAnnotation:true,historyUnchanged:true});
+});
+
+test('grouped names remain presentation only, same-name analyses and stable task folders do not overwrite',async()=>{
+ assert.equal(analysis.plugin.displayName,'合成混合插件');
+ assert.equal(path.basename(path.dirname(analysisDir(analysis.analysisId))),'合成混合插件-分析结果');
+ assert.equal(path.dirname(analysisDir(analysis.analysisId)),path.dirname(analysisDir(sharedDeep.analysisId)));
+ assert.notEqual(analysisDir(analysis.analysisId),analysisDir(sharedDeep.analysisId));
+ const td=findRecordDirectory(root+'/鱼的胃/任务','task',t.taskId),before=fs.readFileSync(td+'/task.json');
+ assert.equal(path.basename(path.dirname(td)),'合成混合插件-拆分任务');
+ await update({mode:t.mode==='reverse'?'compatibility':'reverse'});assert.equal(findRecordDirectory(root+'/鱼的胃/任务','task',t.taskId),td);assert(!before.equals(fs.readFileSync(td+'/task.json')));
+ const metadata=(await task('list',{taskView:'analyses',taskOptions:{limit:20}})).page.items;
+ assert(metadata.filter(r=>r.plugin.displayName==='合成混合插件').length>=2);assert(metadata.every(r=>r.createdAt&&r.updatedAt));
+ assert.equal(directoryLabel(' bad<>:"/\\|?*名字. '),'bad_________名字');assert.equal(sourcePlugin(work+'/missing-package').name,'missing-package');
+ json(work+'/named-layout.json',{analyses:recordEntries(root+'/鱼的胃/分析','analysis'),tasks:recordEntries(root+'/鱼的胃/任务','task'),metadata});
+});
+
+test('legacy direct analysis and task layouts retain linkage, updates, outputs and validity checks',async()=>{
+ const {analyze,compose}=await load('internal/analysis/unified.mjs'),{pathIdentity}=await load('internal/backend/lib/path-identity.mjs');
+ const id=randomUUID(),dir=root+'/鱼的胃/分析/'+id,sourceRecord=read(analysisDir(analysis.analysisId)+'/record.json');
+ const execution=await analyze('initial',source,dir+'/run');assert.equal(execution.analyzerExecutions,1);
+ compose(source,dir+'/bundle',[{name:'initial',path:dir+'/run'}]);
+ const rec={analysisId:id,profile:pathIdentity(profile),kind:'initial',source:sourceRecord.source,status:'ready',bundle:'bundle',createdAt:new Date().toISOString()};
+ json(dir+'/record.json',rec);const before=fs.readFileSync(dir+'/record.json');
+ const query=await call({action:'query',analysisId:id,queryType:'summary'});assert.equal(query.plugin.displayName,'合成混合插件');
+ const linked=await call({action:'analyze',analysisType:'deep',analysisSource:{kind:'local',path:source},initialAnalysisId:id});assert.equal(linked.initialAnalysisId,id);
+ let legacy=await task('create',{analysisId:id,taskMode:'compatibility'});
+ const grouped=findRecordDirectory(root+'/鱼的胃/任务','task',legacy.taskId),direct=root+'/鱼的胃/任务/'+legacy.taskId;
+ const doc=read(grouped+'/task.json');delete doc.plugin;delete doc.analysisKind;delete doc.initialAnalysisId;json(grouped+'/task.json',doc);fs.renameSync(grouped,direct);
+ legacy=await task('read',{taskId:legacy.taskId});assert.equal(legacy.explanationState,'missing');assert.equal(legacy.plugin.displayName,'合成混合插件');
+ const c=(await task('read',{taskId:legacy.taskId,taskView:'capabilities'})).page.items[0];
+ legacy=await task('update',{taskId:legacy.taskId,expectedRevision:legacy.revision,taskPatch:{selected:[c.id]}});
+ legacy=await task('produce',{taskId:legacy.taskId,expectedRevision:legacy.revision});const old=fs.readFileSync(legacy.outputs[0].path),rev=legacy.revision;
+ legacy=await task('update',{taskId:legacy.taskId,expectedRevision:legacy.revision,taskPatch:{mode:'reverse'}});
+ const historical=await task('output',{taskId:legacy.taskId,outputRevision:rev});assert.equal(historical.historical,true);assert(old.equals(fs.readFileSync(legacy.outputs[0].path)));assert(before.equals(fs.readFileSync(dir+'/record.json')));
+ const listed=(await task('list',{taskOptions:{limit:20}})).page.items;assert(listed.some(r=>r.id===legacy.taskId&&r.plugin.displayName==='合成混合插件'));
+ const analyses=(await task('list',{taskView:'analyses',taskOptions:{limit:20}})).page.items;assert(analyses.some(r=>r.id===id));
+ json(work+'/legacy-layout.json',{id,dir,linked,legacy,historical,legacyAnalyzerExecutions:1,recordUnchanged:true});
 });
 test('revision conflicts and choices invalidate confirmation; supplements remain attributed',async()=>{
  await assert.rejects(task('update',{taskId:t.taskId,expectedRevision:1,taskPatch:{mode:'compatibility'}}),/REVISION_CONFLICT/);

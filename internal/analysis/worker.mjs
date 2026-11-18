@@ -5,6 +5,8 @@ import { pathIdentity, samePath } from '../backend/lib/path-identity.mjs';
 import { writeJson } from './io.mjs';
 import { treeManifest, treeHashOf } from '../backend/lib/w6-utils.mjs';
 import { analyze, compose, query, validateRun } from './unified.mjs';
+import { findRecordDirectory, newRecordDirectory, sourcePlugin, recordMetadata } from './records.mjs';
+import { conversationGuide } from './conversation.mjs';
 
 const read = f => JSON.parse(fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, ''));
 const kinds = new Set(['initial', 'deep']);
@@ -66,7 +68,7 @@ function context(scope) {
 }
 function loadRecord(ctx, id) {
   checkId(id);
-  const dir = path.join(ctx.root, id), rec = read(path.join(dir, 'record.json'));
+  const dir = findRecordDirectory(ctx.root, 'analysis', id), rec = read(path.join(dir, 'record.json'));
   if (rec.analysisId !== id || rec.profile !== ctx.profile) throw Error('FH_ANALYSIS_PROFILE_MISMATCH');
   if (!kinds.has(rec.kind)) throw Error('Missing or unsupported saved analysis kind; choose a new output');
   return { dir, rec };
@@ -111,7 +113,8 @@ export async function runAnalysisJob({ args, scope }) {
     const options = args.queryOptions ?? {};
     if (!options || typeof options !== 'object' || Array.isArray(options)) throw Error('queryOptions must be an object');
     const result = await query(path.join(dir, rec.bundle), args.queryType, options);
-    return { ok: result.validity.valid, action: 'query', result: { analysisId: rec.analysisId, kind: rec.kind, ...result } };
+    return { ok: result.validity.valid, action: 'query', result: { analysisId: rec.analysisId, kind: rec.kind,
+      ...recordMetadata(rec, dir, 'analysis'), ...result, conversation: conversationGuide(rec) } };
   }
   if (args.action !== 'analyze' || !kinds.has(args.analysisType)) throw Error('analyze requires analysisType initial or deep');
   const source = resolveSource(args.analysisSource, ctx);
@@ -124,9 +127,9 @@ export async function runAnalysisJob({ args, scope }) {
     validateSavedSources(rec, ctx, dir);
     reused = true;
   } else {
-    const id = randomUUID(); dir = path.join(ctx.root, id);
+    const id = randomUUID(), plugin = sourcePlugin(source.path); dir = newRecordDirectory(ctx.root, 'analysis', id, plugin);
     if (samePath(dir, source.path) || pathIdentity(dir).startsWith(pathIdentity(source.path) + '/')) throw Error('Result directory must be outside source');
-    rec = { analysisId: id, profile: ctx.profile, kind: args.analysisType, source, status: 'running', createdAt: new Date().toISOString() };
+    rec = { analysisId: id, profile: ctx.profile, kind: args.analysisType, source, plugin, status: 'running', createdAt: new Date().toISOString() };
   }
   let initial;
   if (args.initialAnalysisId) {
@@ -145,6 +148,8 @@ export async function runAnalysisJob({ args, scope }) {
     // writer changed the source during copying and restored it before this check.
     validateSavedSources({ ...rec, initialAnalysisId: rec.initialAnalysisId ?? args.initialAnalysisId }, ctx, dir);
     if (!reused) {
+      if (JSON.stringify(sourcePlugin(path.join(dir, 'run/source-snapshot'), source.path)) !== JSON.stringify(rec.plugin))
+        throw Error('插件名称或版本在采集期间改变，请保留此结果并明确创建新分析。');
       const runs = [...(initial ? [{ name: 'initial', path: path.join(initial.dir, 'run') }] : []), { name: args.analysisType, path: path.join(dir, 'run') }];
       compose(source.path, path.join(dir, 'bundle'), runs);
       rec.bundle = 'bundle'; rec.initialAnalysisId = args.initialAnalysisId ?? null;
@@ -160,9 +165,11 @@ export async function runAnalysisJob({ args, scope }) {
       rec.status = status; rec.finishedAt = new Date().toISOString(); atomicRecord(dir, rec);
     }
     return { ok: true, action: 'analyze', result: { analysisId: rec.analysisId, kind: rec.kind, initialAnalysisId: rec.initialAnalysisId ?? null, status, source,
+      ...recordMetadata(rec, dir, 'analysis'), directory: dir,
       action: execution.action, analyzerExecutions: execution.analyzerExecutions, elapsedMs: execution.elapsedMs,
       completeness, summary: summary.page,
-      next: 'query with analysisId and queryType; initial does not run deep. New deep may explicitly reference initialAnalysisId.',
+      next: '按需 query 核对证据，再由当前 DSH 对话解释功能并推荐取舍。初步分析不会自动深入分析。',
+      conversation: conversationGuide(rec),
       boundary: 'Analysis material/splitting evidence only. No candidate execution, safety approval, splitting or installation.' } };
   } catch (error) {
     if (!reused) atomicRecord(dir, { ...rec, status: 'failed', error: error.message });
