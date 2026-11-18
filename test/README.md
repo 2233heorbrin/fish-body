@@ -1,5 +1,12 @@
 # 安装产物回归
 
+`stomach-tasks.test.mjs` 从真实独立包运行胃任务及生产 HTTP/fish_hand 接口。
+设置 `FISH_TEST_INSTALL_ROOT` 为独立安装根、`FISH_TASK_TEST_ROOT` 为尚不存在的隔离目录，
+运行 `node --test test/stomach-tasks.test.mjs`。使用自建混合插件和真实采集清单，
+不依赖 experiments 或私人样本；覆盖两种产出、版本确认、归属、分页与原文坐标、
+来源篡改、Profile/绑定和 off/closing。确认归属为合成测试，不代表真实用户已裁定。
+可在系统 Node 和 `ELECTRON_RUN_AS_NODE=1` 的 DSH Node 模式运行；不代表日常部署或模型对话。
+
 `install-source-preservation.test.mjs` 验证实际包的普通插件/身体自身原包部署及 repair 转交同一来源契约、宿主能力缺失与原包变化在部署前拒绝。它不代替宿主原生 resolver、pnpm、明确续接、真实更新消费者及远端安装验收；这些在匹配扩展的合成环境另验。
 
 `backend-install-decision.test.mjs` 要求独立安装产物和 `FISH_DSH_TEST_ANCHOR` 指向本轮实验宿主 v2；不会用旧 v1 或官方宿主冒充。覆盖实际采集／分析、具体混合操作证据、未知形态、既有正式批准复用、原包内容绑定、import／同步与异步工厂故障、按目标决定、取消、未部署不恢复、部署后恢复及恢复失败、胃不可用和准备进程超时。合成授权仅用于夹具，业务不默认接受残留风险。真实 CLI→明确继续→原生部署→Loader 及真实 repair／批次／重载须另验；单测不代表桌面按钮通过。

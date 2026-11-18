@@ -45,6 +45,8 @@ export const SECTIONS = Object.freeze({
  * 重复注册会覆盖既有实现并丢掉真实的「打开文件夹」行为，因此这里明确不注册。
  */
 export const ROUTES = Object.freeze([
+  { path: '/api/fish-hand/analysis', methods: ['POST'] },
+  { path: '/api/fish-hand/task', methods: ['POST'] },
   { path: '/api/fish-hand/pending', methods: ['GET', 'POST'] },
   { path: '/api/fish-hand/review', methods: ['POST'] },
   { path: '/api/fish-hand/approve', methods: ['POST'] },
@@ -85,6 +87,7 @@ const FULL_TOOL_DESCRIPTION = '鱼的手：submit 把 GitHub 链接下载到饭�
   + 'approve 首次需真实授权与审查；同一请求重试复用有效批准，新增依赖脚本返回待授权范围；'
   + 'reject 拒绝；status 列出已登记插件。analyze 显式选择 initial 初扫或 deep 全源码深查，analysisSource 明确选择本地源码目录或既有请求的固定材料；返回 analysisId。'
   + 'query 用 analysisId 按 summary/evidence/file/capability/phase 分页取证，不启动分析器。新 deep 可用 initialAnalysisId 关联同源初扫。'
+  + 'task 以 compatibility/reverse 创建任务；list/read 分页读取，update 带 expectedRevision 记录能力选择及有来源的判断/依赖决定，produce 产出方案或组件材料，output 分页读取，confirm 只确认具体版本而不授权执行。'
   + '只产出分析材料和拆分依据，不执行候选代码，不代表安全批准或拆分成功；不调用模型。本工具不自行批准、不安装插件。';
 
 /** 测试注入钩子（W4 arm 用）：显式喂入 profileDir / patchPath 等线索。
@@ -233,6 +236,15 @@ export function createHandler({ orchestrator = null, getOrch = null, frameworkRo
       }
     }
 
+    if (path === '/api/fish-hand/task' || path === '/api/fish-hand/analysis') {
+      try {
+        const { analysisToolAction } = await import('../analysis/service.mjs');
+        if (path.endsWith('/analysis') && !['analyze', 'query'].includes(body.action)) throw Error('Explicit analyze/query action required');
+        const out = await analysisToolAction(path.endsWith('/task') ? { ...body, action: 'task' } : body,
+          { frameworkRoot: bodySwitch.frameworkRoot ?? frameworkRoot, profileDir: hints.profileDir });
+        return jsonResponse(request, out);
+      } catch (error) { return jsonResponse(request, { ok: false, error: error.message }, 400); }
+    }
     if (path.startsWith('/api/fish-hand/')) {
       const out = await orch.handleRest({ method: request.method, path, body });
       return jsonResponse(request, out.body, out.status ?? 200);
@@ -295,7 +307,24 @@ export function fishHandToolDefinition({ orchestrator = null, getOrch = null, fr
       additionalProperties: false,
       required: ['action'],
       properties: {
-        action: { type: 'string', enum: ['submit', 'review', 'approve', 'reject', 'status', 'analyze', 'query'] },
+        action: { type: 'string', enum: ['submit', 'review', 'approve', 'reject', 'status', 'analyze', 'query', 'task'] },
+        taskOperation: { type: 'string', enum: ['list', 'create', 'read', 'update', 'produce', 'confirm', 'output'] },
+        taskId: { type: 'string', description: 'Backend task UUID; never a file path' },
+        taskMode: { type: 'string', enum: ['compatibility', 'reverse'], description: 'create: explicit processing mode; update via taskPatch.mode' },
+        expectedRevision: { type: 'integer', minimum: 1, description: 'Required for update/produce/confirm; refresh after conflict' },
+        taskView: { type: 'string', enum: ['overview', 'analyses', 'capabilities', 'dependencies', 'unknowns'] },
+        taskOptions: { type: 'object', additionalProperties: false, properties: { offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 20 } } },
+        outputRevision: { type: 'integer', minimum: 1 },
+        taskConfirmation: { type: 'object', additionalProperties: false, required: ['kind', 'actor', 'reason'], properties: {
+          kind: { type: 'string', enum: ['user', 'current-model'] }, actor: { type: 'string' }, reason: { type: 'string' } } },
+        taskPatch: { type: 'object', additionalProperties: false, properties: {
+          mode: { type: 'string', enum: ['compatibility', 'reverse'] }, analysisId: { type: 'string' },
+          selected: { type: 'array', items: { type: 'string' } },
+          classification: { type: 'object', additionalProperties: true, description: '{value:tool|brain|mixed|unknown, origin:{kind:user|current-model,actor,reason}, evidenceRefs:[exact IDs]}' },
+          addCapabilities: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Attributed {name,category:tool|brain|unknown,origin,evidenceRefs}; never relabel as program discovery' },
+          dependencyDecisions: { type: 'array', items: { type: 'object', additionalProperties: true }, description: '{id,decision:retain|narrow|exclude|pending,rationale,origin,evidenceRefs,proposedChange?,businessSemanticChange:yes|no|unknown,acceptIncidental?,acceptanceReason?}; incidental acceptance requires user attribution' },
+          unknowns: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Attributed {text,origin,evidenceRefs}; preserve unresolved tradeoffs' },
+        } },
         analysisType: { type: 'string', enum: ['initial', 'deep'], description: 'analyze 必填；initial 不运行深查，deep 显式运行全源码 ts-morph（不是单函数增量）' },
         analysisSource: { type: 'object', additionalProperties: false, required: ['kind'], properties: {
           kind: { type: 'string', enum: ['local', 'request'] },
@@ -345,7 +374,7 @@ export function fishHandToolDefinition({ orchestrator = null, getOrch = null, fr
     execute: async (args = {}) => jsonSafe(await (async () => {
       const action = String(args.action ?? '');
       const dispatchAction = async () => {
-        if (action === 'analyze' || action === 'query') {
+        if (action === 'analyze' || action === 'query' || action === 'task') {
           const { analysisToolAction } = await import('../analysis/service.mjs');
           return analysisToolAction(args, { frameworkRoot: bodySwitch.frameworkRoot ?? frameworkRoot, profileDir: hints.profileDir });
         }

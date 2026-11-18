@@ -163,6 +163,15 @@ function installDataClient(React, ctx, component) {
 .fb-data button:disabled{opacity:.6;cursor:default}
 .fb-retry{margin-top:10px}
 .fb-icon{flex:0 0 auto;display:block}
+.fb-tasks{margin-top:24px;border-top:1px solid var(--dsw-alias-border-l1,#e2e6ea);padding-top:16px;overflow-wrap:anywhere}
+.fb-tasks h4{margin:24px 0 8px}.fb-tasks small{display:block;color:var(--dsw-alias-label-secondary,#5b6570)}
+.fb-task-field{display:block;margin:12px 0}.fb-task-field input,.fb-task-field select{display:block;width:100%;margin-top:4px}
+.fb-tasks input:not([type=checkbox]):not([type=radio]),.fb-tasks select{font:inherit;color:inherit;background:var(--dsw-alias-bg-layer-2,#fff);border:1px solid var(--dsw-alias-border-l1,#b0b8c2);border-radius:6px;padding:6px 8px;max-width:100%}
+.fb-task-modes{display:flex;gap:20px;flex-wrap:wrap;margin:16px 0;border:1px solid var(--dsw-alias-border-l1,#e2e6ea);border-radius:6px}
+.fb-task-cap{display:block;padding:8px 0}.fb-task-cap input,.fb-task-modes input{margin-right:8px;accent-color:var(--dsw-alias-brand-primary,#2f6feb)}
+.fb-task-dep{padding:12px 0;border-bottom:1px solid var(--dsw-alias-border-l1,#e2e6ea)}.fb-task-dep p{margin:4px 0}
+.fb-task-output{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--dsw-alias-bg-layer-2,#f4f6f8);padding:12px;font-size:12px;max-height:480px;overflow:auto}
+.fb-tasks :focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#2f6feb);outline-offset:2px}.fb-tasks button:disabled{opacity:.6;cursor:default}
 `
 
     /* 统一风格线性图标：内联 SVG stroke，无图标库，文字标签始终保留。 */
@@ -187,6 +196,102 @@ function installDataClient(React, ctx, component) {
         'stroke-linecap': 'round', 'stroke-linejoin': 'round',
         'aria-hidden': 'true', focusable: 'false', className: 'fb-icon'
       }, ...(paths[kind] || []))
+    }
+
+    function StomachTasks() {
+      const [task, setTask] = useState(null), [caps, setCaps] = useState([]), [deps, setDeps] = useState(null)
+      const [analyses, setAnalyses] = useState([]), [analysisOffset, setAnalysisOffset] = useState(null)
+      const [analysisId, setAnalysisId] = useState(''), [taskId, setTaskId] = useState(''), [sourcePath, setSourcePath] = useState('')
+      const [initialId, setInitialId] = useState('')
+      const [mode, setMode] = useState('compatibility'), [busy, setBusy] = useState(false), [issue, setIssue] = useState('')
+      const [output, setOutput] = useState(null), [judgment, setJudgment] = useState('unknown'), [reason, setReason] = useState('')
+      const [unknowns, setUnknowns] = useState(null)
+      const [editing, setEditing] = useState(null), [decision, setDecision] = useState('pending'), [depReason, setDepReason] = useState('')
+      const [change, setChange] = useState(''), [semantic, setSemantic] = useState('unknown'), [accept, setAccept] = useState(false)
+      const labels = { compatibility: '兼容拆分', reverse: '逆向拆分', tool: '工具类', brain: '脑区类', mixed: '混合类', unknown: 'unknown / 待判断',
+        'selection-pending': '待选择能力', 'plan-pending': '方案待讨论', 'plan-awaiting-confirmation': '方案待确认 / 待执行', 'materials-produced': '组件材料已产出（未解耦）',
+        'confirmed-with-open-questions': '已记录确认，仍有待定项', 'confirmed-awaiting-separate-execution': '已确认，执行另行授权', 'materials-confirmed': '组件材料已确认（未解耦）', 'model-reviewed-awaiting-user': '已记录模型意见，待用户确认',
+        implementation: '直接实现候选', 'shared-state-initialization': '共享服务、状态与初始化', 'lifecycle-release': '生命周期与释放', 'resources-programs': '资源与外部程序', 'incidental-behavior': '附带行为', 'unresolved-relation': '无法判断的关系',
+        pending: '待判断', retain: '保留', narrow: '收窄', exclude: '排除' }
+      async function api(args, route = 'task') {
+        const response = await fetch('/api/fish-hand/' + route, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(args) })
+        const value = await response.json()
+        if (!response.ok || !value.ok) throw Error(value.error || value.result?.message || value.result?.validity?.reasons?.join('; ') || '结果失效，请刷新并明确选择新的分析。')
+        return value.result
+      }
+      async function run(fn) { if (busy) return; setBusy(true); setIssue(''); try { await fn() } catch (e) { setIssue(e.message) } finally { setBusy(false) } }
+      async function listAnalyses(offset = 0) {
+        const r = await api({ taskOperation: 'list', taskView: 'analyses', taskOptions: { offset, limit: 20 } })
+        setAnalyses(old => offset ? [...old, ...r.page.items] : r.page.items); setAnalysisOffset(r.page.nextOffset)
+      }
+      function chooseAnalysis(id, result = analyses.find(a => a.id === id)) {
+        setAnalysisId(id)
+        setInitialId(result?.kind === 'initial' ? id : result?.kind === 'deep' ? result.initialAnalysisId || '' : '')
+      }
+      useEffect(() => { run(() => listAnalyses()) }, [])
+      async function load(id) {
+        const t = await api({ taskOperation: 'read', taskId: id }); setTask(t); setTaskId(id); setMode(t.mode); chooseAnalysis(t.analysisId); setOutput(null)
+        setJudgment(t.judgment?.value || 'unknown'); setReason(t.judgment?.origin?.reason || '')
+        const rows = []; let offset = 0
+        do { const r = await api({ taskOperation: 'read', taskId: id, taskView: 'capabilities', taskOptions: { offset, limit: 20 } }); rows.push(...r.page.items); offset = r.page.nextOffset } while (offset !== null)
+        setCaps(rows); setDeps((await api({ taskOperation: 'read', taskId: id, taskView: 'dependencies', taskOptions: { limit: 5 } })).page)
+        setUnknowns((await api({ taskOperation: 'read', taskId: id, taskView: 'unknowns', taskOptions: { limit: 5 } })).page)
+      }
+      async function update(patch) { const t = await api({ taskOperation: 'update', taskId: task.taskId, expectedRevision: task.revision, taskPatch: patch }); await load(t.taskId) }
+      const attribution = why => ({ kind: 'user', actor: '设置页使用者', reason: why })
+      const button = (name, action) => h('button', { type: 'button', className: 'fb-tab', disabled: busy, onClick: () => run(action) }, name)
+      const field = (name, value, change, placeholder = '') => h('label', { className: 'fb-task-field' }, name, h('input', { value, disabled: busy, placeholder, onChange: e => change(e.target.value) }))
+      const nav = (p, fetchPage) => p ? h('div', { className: 'fb-data-actions' }, h('span', null, p.total + ' 项 · 当前 ' + (p.offset + 1) + '–' + (p.offset + p.items.length)), p.offset > 0 ? button('上一页', () => fetchPage(Math.max(0, p.offset - p.limit))) : null, p.nextOffset !== null ? button('下一页', () => fetchPage(p.nextOffset)) : null) : null
+      const modeChoices = h('fieldset', { disabled: busy, className: 'fb-task-modes' }, h('legend', null, '任务模式'), ['compatibility', 'reverse'].map(m => h('label', { key: m }, h('input', { type: 'radio', name: 'stomach-mode', value: m, checked: mode === m, onChange: () => task ? run(() => update({ mode: m })) : setMode(m) }), labels[m])))
+      const readOutput = async offset => setOutput(await api({ taskOperation: 'output', taskId: task.taskId, taskOptions: { offset, limit: 5 } }))
+      return h('section', { className: 'fb-tasks', 'aria-label': '胃任务' },
+        h('h3', null, '能力选择与产出'),
+        h('p', { className: 'fb-note' }, '兼容模式形成统一派生插件的待确认方案；逆向模式提供组件源码和证据材料。本页不执行适配、不制作安装包、不安装，也不会调用模型。'),
+        modeChoices,
+        h('details', { open: !task }, h('summary', null, '分析来源与任务入口'),
+          h('label', { className: 'fb-task-field' }, '已有分析结果', h('select', { value: analyses.some(a => a.id === analysisId) ? analysisId : '', disabled: busy, onChange: e => chooseAnalysis(e.target.value) }, h('option', { value: '' }, '选择当前 Profile 的结果'), analyses.map(a => h('option', { key: a.id, value: a.id }, a.id + ' · ' + (a.kind || 'unknown') + ' · ' + a.status)))),
+          analysisOffset !== null ? button('更多分析结果', () => listAnalyses(analysisOffset)) : null,
+          field('任务分析结果 analysisId', analysisId, chooseAnalysis, '用于创建任务，可选择 initial 或 deep'),
+          h('label', { className: 'fb-task-field' }, '深查关联的 initial 初扫', h('select', { value: initialId, disabled: busy, onChange: e => setInitialId(e.target.value) },
+            h('option', { value: '' }, '请明确选择同源 initial 结果'),
+            initialId && !analyses.some(a => a.kind === 'initial' && a.id === initialId) ? h('option', { value: initialId }, initialId + ' · 已明确关联的 initial') : null,
+            analyses.filter(a => a.kind === 'initial').map(a => h('option', { key: a.id, value: a.id }, a.id + ' · initial')))),
+          h('p', { className: 'fb-note' }, initialId ? '深查使用上方明确的初扫关联；后端仍校验来源及有效性。任务结果可独立选择 initial 或 deep。' : '尚未确定初扫关联：请在上方选择同源 initial（可加载更多结果），或先明确源码并点击 initial 初扫。查看结果不会自动扫描。'),
+          field('明确源码目录', sourcePath, setSourcePath, '源码目录绝对路径，仅只读分析'),
+          h('div', { className: 'fb-data-actions' }, button('开始 initial 初扫', async () => { const r = await api({ action: 'analyze', analysisType: 'initial', analysisSource: { kind: 'local', path: sourcePath } }, 'analysis'); chooseAnalysis(r.analysisId, r); await listAnalyses() }),
+            button('显式 deep 深查', async () => { if (!initialId) throw Error('请先明确选择同源 initial 初扫结果；不会自动重新扫描。'); const r = await api({ action: 'analyze', analysisType: 'deep', analysisSource: { kind: 'local', path: sourcePath }, initialAnalysisId: initialId }, 'analysis'); chooseAnalysis(r.analysisId, r); await listAnalyses() }),
+            button('创建任务', async () => { const r = await api({ taskOperation: 'create', analysisId, taskMode: mode }); await load(r.taskId) })),
+          field('任务 ID', taskId, setTaskId), button('读取任务', () => load(taskId))),
+        busy ? h('p', { role: 'status' }, '正在处理…') : null,
+        issue ? h('p', { className: 'fb-error', role: 'alert' }, issue) : null,
+        task ? h('div', null,
+          h('p', { className: 'fb-path' }, task.taskId + ' · 版本 ' + task.revision),
+          h('p', { role: 'status', 'aria-live': 'polite' }, labels[task.phase] || task.phase),
+          button('刷新任务', () => load(task.taskId)),
+          h('h4', null, '整体分类'),
+          h('p', null, '程序候选：' + labels[task.classification.value] + '（未确认）'), h('p', { className: 'fb-note' }, task.classification.reason),
+          h('p', { className: 'fb-path' }, '依据：' + task.classification.evidenceRefs.join(', ')),
+          h('p', null, task.judgment ? '已记录判断：' + labels[task.judgment.value] + ' · ' + task.judgment.origin.kind : '模型 / 用户判断待讨论'),
+          h('label', { className: 'fb-task-field' }, '用户分类判断', h('select', { value: judgment, disabled: busy, onChange: e => setJudgment(e.target.value) }, ['unknown', 'tool', 'brain', 'mixed'].map(v => h('option', { key: v, value: v }, labels[v])))),
+          field('判断理由', reason, setReason), button('记录用户判断', () => update({ classification: { value: judgment, origin: attribution(reason), evidenceRefs: task.classification.evidenceRefs } })),
+          h('h4', null, '选择保留能力'),
+          caps.length ? caps.map(c => h('label', { key: c.id, className: 'fb-task-cap' }, h('input', { type: 'checkbox', checked: task.selected.includes(c.id), disabled: busy, onChange: e => { const checked = e.target.checked; run(() => update({ selected: checked ? [...task.selected, c.id] : task.selected.filter(id => id !== c.id) })) } }), c.name + ' · ' + c.category + ' · ' + c.origin.kind, h('small', null, c.id + ' / ' + c.evidenceRefs.join(', ')))) : h('p', null, '没有自动识别的能力；可在当前对话补充有来源的能力，不默认当作工具类。'),
+          h('h4', null, '依赖与待定项'), h('p', { className: 'fb-note' }, '模块闭包只是候选范围。共享服务、any 或 unknown 都需要具体讨论，不自动判定必须保留、删除或无法拆分。'),
+          deps?.items.map(d => h('div', { key: d.id, className: 'fb-task-dep' }, h('strong', null, labels[d.kind] + ' · ' + labels[d.decision]), h('p', null, d.rationale), h('small', null, d.id + ' · 引用 ' + d.evidenceRefs.join(', ') + (d.scope.truncated ? ' · 证据有截断，使用 query 分页读取' : '')),
+            button('编辑依赖决定', async () => { setEditing(d.id); setDecision(d.decision); setDepReason(d.rationale); setChange(d.proposedChange || ''); setSemantic(d.businessSemanticChange); setAccept(false) }))),
+          nav(deps, async offset => setDeps((await api({ taskOperation: 'read', taskId: task.taskId, taskView: 'dependencies', taskOptions: { offset, limit: 5 } })).page)),
+          editing ? h('fieldset', { disabled: busy }, h('legend', null, '依赖决定 · ' + editing), h('select', { 'aria-label': '处理决定', value: decision, onChange: e => setDecision(e.target.value) }, ['pending', 'retain', 'narrow', 'exclude'].map(v => h('option', { key: v, value: v }, labels[v]))), field('决定理由', depReason, setDepReason), field('拟调整接线（未执行）', change, setChange),
+            h('label', null, '业务语义变化', h('select', { value: semantic, onChange: e => setSemantic(e.target.value) }, ['unknown', 'yes', 'no'].map(v => h('option', { key: v, value: v }, v)))),
+            editing.endsWith(':D5') ? h('label', null, h('input', { type: 'checkbox', checked: accept, onChange: e => setAccept(e.target.checked) }), '明确接受本条理由中说明的附带行为') : null,
+            button('保存依赖决定', async () => { await update({ dependencyDecisions: [{ id: editing, decision, rationale: depReason, origin: attribution(depReason), proposedChange: change, businessSemanticChange: semantic, acceptIncidental: accept, ...(accept ? { acceptanceReason: depReason } : {}) }] }); setEditing(null) })) : null,
+          h('details', null, h('summary', null, '待定项 · ' + task.unknownCount), unknowns?.items.map((u, i) => h('p', { key: i }, u.text + ' · ' + u.origin.kind + ' · ' + u.evidenceRefs.join(', '))), nav(unknowns, async offset => setUnknowns((await api({ taskOperation: 'read', taskId: task.taskId, taskView: 'unknowns', taskOptions: { offset, limit: 5 } })).page))),
+          h('p', { className: 'fb-note' }, '诊断：' + JSON.stringify(task.completeness.runs.map(r => ({ run: r.name, ...r.completeness })))),
+          h('p', { className: 'fb-note' }, '当前对话可用 fish_hand action=task，taskId=' + task.taskId + ' 读取 / 补充判断；更新需 expectedRevision=' + task.revision + '。原始证据用 action=query、analysisId=' + task.analysisId + ' 分页读取。页面不会代替模型作出判断。'),
+          h('div', { className: 'fb-data-actions' }, button(task.mode === 'compatibility' ? '生成兼容方案' : '生成逆向材料', async () => { await api({ taskOperation: 'produce', taskId: task.taskId, expectedRevision: task.revision }); await load(task.taskId); await readOutput(0) }),
+            button('读取当前产出', () => readOutput(0)), button('确认当前方案版本', async () => { const why = reason.trim(); if (!why) throw Error('请填写本次确认理由；确认不代表部署授权。'); await api({ taskOperation: 'confirm', taskId: task.taskId, expectedRevision: task.revision, taskConfirmation: attribution(why) }); await load(task.taskId) })),
+          h('p', { className: 'fb-note' }, '变更模式、能力或内容会使原确认失效，旧产出保留。确认仅针对当前版本；适配和安装尚未开放。'),
+          task.outputs.map(o => h('p', { key: o.revision, className: 'fb-path' }, '版本 ' + o.revision + ' · ' + o.kind + ' · ' + o.path)),
+          output ? h('section', { 'aria-label': '产出内容' }, h('h4', null, '产出内容'), h('pre', { className: 'fb-task-output' }, JSON.stringify(output.page.items, null, 2)), nav(output.page, readOutput)) : null) : null)
     }
 
     function FishBodySection() {
@@ -358,7 +463,8 @@ function installDataClient(React, ctx, component) {
         ),
         h(FishDataPanel, { onState: () => setRetryKey(key => key + 1) }),
         tabs,
-        body
+        body,
+        current?.id === 'stomach' ? h(StomachTasks) : null
       )
     }
 

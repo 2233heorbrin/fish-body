@@ -85,7 +85,20 @@ function validateSavedSources(rec, ctx, dir) {
 function atomicRecord(dir, rec) {
   const tmp = path.join(dir, 'record.' + process.pid + '.tmp'); writeJson(tmp, rec); fs.renameSync(tmp, path.join(dir, 'record.json'));
 }
+// Shared read boundary for task planning/materials. Never repairs or reruns an analysis.
+export async function openTaskAnalysis(scope, id) {
+  const ctx = context(scope), { dir, rec } = loadRecord(ctx, id);
+  if (!['ready', 'diagnostic-partial'].includes(rec.status)) throw Error('Analysis is not completed: ' + rec.status);
+  validateSavedSources(rec, ctx, dir);
+  const summary = await query(path.join(dir, rec.bundle), 'summary');
+  if (!summary.validity.valid) throw Error('FH_TASK_ANALYSIS_INVALID: ' + summary.validity.reasons.join('; '));
+  return { ctx, dir, rec, summary, bundle: read(path.join(dir, rec.bundle, 'bundle.json')) };
+}
 export async function runAnalysisJob({ args, scope }) {
+  if (args.action === 'task') {
+    const { taskJob } = await import('./tasks.mjs');
+    return taskJob(args, scope, { context, openTaskAnalysis, checkId });
+  }
   const ctx = context(scope);
   if (args.action === 'query') {
     if (!queries.has(args.queryType)) throw Error('queryType: summary, evidence, file, capability or phase required');
@@ -146,7 +159,7 @@ export async function runAnalysisJob({ args, scope }) {
     if (!reused) {
       rec.status = status; rec.finishedAt = new Date().toISOString(); atomicRecord(dir, rec);
     }
-    return { ok: true, action: 'analyze', result: { analysisId: rec.analysisId, kind: rec.kind, status, source,
+    return { ok: true, action: 'analyze', result: { analysisId: rec.analysisId, kind: rec.kind, initialAnalysisId: rec.initialAnalysisId ?? null, status, source,
       action: execution.action, analyzerExecutions: execution.analyzerExecutions, elapsedMs: execution.elapsedMs,
       completeness, summary: summary.page,
       next: 'query with analysisId and queryType; initial does not run deep. New deep may explicitly reference initialAnalysisId.',

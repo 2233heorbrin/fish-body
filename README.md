@@ -1,5 +1,51 @@
 # fish-body（鱼的身体）
 
+## 胃任务（0.0.7-dev.1，分支测试版）
+
+本分支增加能力选择与两种产出；测试安装来源为 `github:2233heorbrin/fish-body#feat/stomach-split-tasks`，
+这些任务入口不属于此前正式标签 v0.0.6。真实日常页面和当前 DSH 对话的用户验收仍待完成；
+本地专项与隔离浏览器验证不代替用户裁定或日常验收。版本变化可使旧分析见证失效，保留旧结果并明确选择新分析，不改写旧见证。
+设置页的胃分区与现有 `fish_hand` 共用任务服务、Profile、身体绑定和关闭/closing 门禁。
+先显式 initial / deep 或选择已有有效 analysisId，再创建任务：
+
+```json
+{"action":"task","taskOperation":"create","analysisId":"<valid-analysis-id>","taskMode":"compatibility"}
+{"action":"task","taskOperation":"read","taskId":"<returned-task-id>","taskView":"capabilities","taskOptions":{"limit":5}}
+{"action":"task","taskOperation":"update","taskId":"<task-id>","expectedRevision":1,"taskPatch":{"selected":["<capability-id>"]}}
+```
+
+模式为任务内的互斥选择，不是插件开关。`compatibility` 产出保留/排除能力、六类依赖决定、
+接线提议、语义变化、附带行为接受情况和后续验收的方案；后续目标是一份保留原名、一个原生
+开关的统一派生产物，本轮不改写候选、不打包或安装。`reverse` 产出组件说明、来源身份、
+带原文件/行号/证据的源码片段、依赖上下文和独立化待办；引用既有快照，不复制整个插件，
+不生成可运行的新插件。共享文件未证明相关的部分明确作为待判断上下文。
+
+`taskOperation` 支持 list/create/read/update/produce/confirm/output。
+list 的 taskView=analyses 列当前 Profile 的分析元数据（使用时再次校验），默认列任务；
+分析元数据包含 kind 和明确的 initialAnalysisId，页面将任务结果与深查初扫来源分开；
+未识别初扫关联时要求明确选择，不把 deep 结果当 initial，也不自动扫描。
+read 的 taskView=overview/capabilities/dependencies/unknowns。列表和产出读取都使用
+`taskOptions.offset/limit` 与返回的 nextOffset，默认5项、最多20项，保留诊断和坐标。
+produce/confirm/update 必须提供当前 expectedRevision；output 可指定 outputRevision 读取
+明确标记的历史产出，仍校验其分析来源。不会自动重跑分析。
+
+整体分类的程序候选与判断分开保存；无命中保持 unknown，状态访问不自动等于脑记忆。
+能力补充、分类判断、依赖决定和确认需显式 origin={kind:user|current-model,actor,reason}，
+这是调用方归属声明，不是身份认证。addCapabilities 中提供 name/category/evidenceRefs；
+classification 中提供 value/evidenceRefs；dependencyDecisions 中提供 id/decision/rationale/
+origin/evidenceRefs，可补 proposedChange 和 businessSemanticChange=yes|no|unknown。
+保留、收窄、排除或待判断均须具体理由；附带行为须独立、明确的用户归属接受，不随能力选择
+自动接受。unknowns 是带来源的补充问题，既有分析限制另行保留。
+同一分析和依赖的有效补充证据随决定保留；显式替换或清空引用仍可生效，更换分析则重置。
+
+模式、能力、内容或判断变化推进版本并清除原确认；旧产出保留。切换 analysisId 需新结果有效，
+并清空旧选择/判断；源码、Profile、绑定或实现见证失配拒绝旧结论。模型确认只记为模型意见，
+仍待用户确认；用户确认也不授权适配或部署。所有脑区行为限定插件作用域，不写鱼脑全局数据。
+
+页面不会自动请求模型；在当前 DSH 对话给出 taskId，通过 task read/update/produce/output
+讨论材料和记录选择。任务写入身体绑定根的 `鱼的胃/任务/<taskId>`，只存方案和材料；
+程序及未来派生运行产物仍归鱼的手维护。当前没有执行适配/安装按钮，不改变原审批策略。
+
 ## 源码分析与按需取证（0.0.6）
 
 本版新增 `fish_hand` 的 `analyze` / `query` 动作；submit/review/approve/reject/status
