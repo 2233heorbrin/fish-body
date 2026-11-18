@@ -77,13 +77,15 @@ export function resolveOrchestrator({ orchestrator = null, frameworkRoot = null,
 /* ================================================================== W2 · 总开关门禁 ================================================================== */
 
 /** 身体已关闭：给可见入口 / 对话工具的统一提示（逐字覆盖用户要求）。 */
-const OFF_MESSAGE = '鱼的身体当前已关闭；如需按饭→胃→手统一流程安装，请由用户在插件页手动开启「鱼的身体」。普通安装仍可走 DSH 原生机制。';
+const OFF_MESSAGE = '鱼的身体当前已关闭；如需分析源码或按饭→胃→手统一流程安装，请由用户在插件页手动开启「鱼的身体」。普通安装仍可走 DSH 原生机制。';
 /** 正在关闭：等待在途操作收尾期间，不再启动新的身体流程。 */
 const CLOSING_MESSAGE = '鱼的身体正在关闭：当前操作完成后退出，等待期间不再启动新的身体流程。';
 /** fish_hand 工具 on 态的完整说明（off/closing 时降级为纯提示壳，见下）。 */
 const FULL_TOOL_DESCRIPTION = '鱼的手：submit 把 GitHub 链接下载到饭并登记安装意图；review 在胃里生成审查材料并返回待批项；'
   + 'approve 首次需真实授权与审查；同一请求重试复用有效批准，新增依赖脚本返回待授权范围；'
-  + 'reject 拒绝；status 列出已登记插件。本工具不自行批准、不安装插件。';
+  + 'reject 拒绝；status 列出已登记插件。analyze 显式选择 initial 初扫或 deep 全源码深查，analysisSource 明确选择本地源码目录或既有请求的固定材料；返回 analysisId。'
+  + 'query 用 analysisId 按 summary/evidence/file/capability/phase 分页取证，不启动分析器。新 deep 可用 initialAnalysisId 关联同源初扫。'
+  + '只产出分析材料和拆分依据，不执行候选代码，不代表安全批准或拆分成功；不调用模型。本工具不自行批准、不安装插件。';
 
 /** 测试注入钩子（W4 arm 用）：显式喂入 profileDir / patchPath 等线索。
  *  生产由 apply / createFishBodyApprovalHost 的 config 显式提供，不依赖此钩子。 */
@@ -293,7 +295,24 @@ export function fishHandToolDefinition({ orchestrator = null, getOrch = null, fr
       additionalProperties: false,
       required: ['action'],
       properties: {
-        action: { type: 'string', enum: ['submit', 'review', 'approve', 'reject', 'status'] },
+        action: { type: 'string', enum: ['submit', 'review', 'approve', 'reject', 'status', 'analyze', 'query'] },
+        analysisType: { type: 'string', enum: ['initial', 'deep'], description: 'analyze 必填；initial 不运行深查，deep 显式运行全源码 ts-morph（不是单函数增量）' },
+        analysisSource: { type: 'object', additionalProperties: false, required: ['kind'], properties: {
+          kind: { type: 'string', enum: ['local', 'request'] },
+          path: { type: 'string', description: 'local：用户明确选择的源码目录绝对路径；只读解析，不导入代码或配置' },
+          requestId: { type: 'string', description: 'request：当前 Profile 已采集的固定源码请求 ID；不新建安装意图' },
+        } },
+        analysisId: { type: 'string', description: 'query 必填，后端返回的结果 ID；analyze 可用同类型有效 ID 复用。不接受结果文件路径；失效时明确新建，不自动重跑' },
+        initialAnalysisId: { type: 'string', description: '仅新 deep：关联同一源码的有效初扫，保留修订/冲突/补充关系；不重新初扫' },
+        queryType: { type: 'string', enum: ['summary', 'evidence', 'file', 'capability', 'phase'] },
+        queryOptions: { type: 'object', additionalProperties: false, properties: {
+          id: { type: 'string', description: 'evidence：完整带运行命名空间的证据 ID，例如 deep/M0001' },
+          file: { type: 'string', description: '源码相对文件名，用于 file 或 phase 选择，不作为任意结果路径读取' },
+          line: { type: 'integer', minimum: 1 }, name: { type: 'string', description: 'capability：已有能力候选名' },
+          function: { type: 'string', description: 'phase：明确函数名；有限静态关系，不证明执行或释放' },
+          stage: { type: 'string', description: 'phase：可选人工问题标签，不是自动业务识别' },
+          offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 20 },
+        }, description: '默认5项、最多20项及16000字节响应预算；使用返回的 nextOffset 继续读取' },
         source: { type: 'string', description: 'submit：GitHub 仓库或 /tree/<ref>/<subdir> 链接' },
         ref: {type:'string',description:'submit：明确分支/标签/提交；带斜杠分支无法唯一确定时与 subdir 一起提供'},
         subdir: {type:'string',description:'submit：仓库内插件相对子目录，例如 plugins/github-manager'},
@@ -325,6 +344,13 @@ export function fishHandToolDefinition({ orchestrator = null, getOrch = null, fr
     },
     execute: async (args = {}) => jsonSafe(await (async () => {
       const action = String(args.action ?? '');
+      const dispatchAction = async () => {
+        if (action === 'analyze' || action === 'query') {
+          const { analysisToolAction } = await import('../analysis/service.mjs');
+          return analysisToolAction(args, { frameworkRoot: bodySwitch.frameworkRoot ?? frameworkRoot, profileDir: hints.profileDir });
+        }
+        return dispatch(resolve());
+      };
       /** 真实编排动作：与改动前逐字一致；orchestrator 仅在 on 态首次调用时惰性构造。 */
       const dispatch = async (orchestrator) => {
         if (action === 'submit') {
@@ -402,10 +428,10 @@ export function fishHandToolDefinition({ orchestrator = null, getOrch = null, fr
         throw new Error(`[FH_BAD_REQUEST] 未知 action：${action}`);
       };
       // 无 phase 线索（回归脚本）：逐字原行为。
-      if (!gated) return dispatch(resolve());
+      if (!gated) return dispatchAction();
       const state = readBodyPhase(hints);
       if (state.phase !== 'on') return toolPromptResult(action, state);
-      return withBodyOperation(opDirFor(state, hints), () => dispatch(resolve()));
+      return withBodyOperation(opDirFor(state, hints), dispatchAction);
     })()),
     presentCall: (args) => ({ card: 'generic', title: `鱼的手 · ${args.action}`, kind: 'read' }),
     presentResult: () => ({ card: 'generic', title: '鱼的手结果' }),

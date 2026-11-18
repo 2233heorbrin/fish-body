@@ -1,5 +1,70 @@
 # fish-body（鱼的身体）
 
+## 源码分析与按需取证（0.0.6-dev.1 分支测试版）
+
+测试版新增 `fish_hand` 的 `analyze` / `query` 动作；已发布的 0.0.5
+不包含此增量。submit/review/approve/reject/status 和安装决定沿用原有语义。
+测试来源为 `github:2233heorbrin/fish-body#feat/stomach-analysis-spike`，
+交给 DSH 原生插件管理安装；分支会随后续提交变化，以安装时固定的 commit 为准。
+这不是正式发布，真实 DSH 模型对话验收尚待完成；正式版仍为 0.0.5。
+仅用户明确请求分析时启动独立 Node 子进程，不执行候选入口、可执行配置、构建、
+安装脚本或模型请求。启用身体、status、query 均不启动深查；身体关闭或 closing
+时拒绝新动作，已接纳操作按现有在途机制收尾。
+
+对话工具参数示例（`path` 由用户明确指定源码目录的绝对路径）：
+
+```json
+{"action":"analyze","analysisType":"initial","analysisSource":{"kind":"local","path":"<absolute-source-directory>"}}
+```
+
+返回 `analysisId` 后按需读取，而非把完整分析 JSON 注入对话：
+
+```json
+{"action":"query","analysisId":"<returned-id>","queryType":"summary","queryOptions":{"limit":5}}
+{"action":"query","analysisId":"<returned-id>","queryType":"file","queryOptions":{"file":"index.js","line":10}}
+{"action":"query","analysisId":"<returned-id>","queryType":"evidence","queryOptions":{"id":"initial/E0001","limit":3}}
+{"action":"query","analysisId":"<returned-id>","queryType":"capability","queryOptions":{"name":"<candidate-name>"}}
+{"action":"query","analysisId":"<returned-id>","queryType":"phase","queryOptions":{"function":"apply","stage":"用户指定的注册阶段问题"}}
+```
+
+`evidence` 使用返回的完整命名空间 ID；`file` 是源码相对文件名，不能用它读取任意
+结果文件。默认 5 项、最多 20 项、整个工具返回最多 16000 字节；用 `nextOffset`
+继续。保留原始文件、坐标单位和 JSON pointer，以及 revision/conflict/supplement
+关系。事实、语法候选、解释、unknown、any、多来源、条件和截断分别可见。
+
+显式深查：同样的 `analysisSource`，使用 `analysisType:"deep"`；可加
+`initialAnalysisId:"<initial-id>"` 合并同内容的初扫证据与修订关系。
+这是整批 JS/TS 源码深查，不是按函数增量。初扫结果本身不能冒充深查。
+同类型请求可传原 `analysisId` 复用；跨类型、缺失/未知类型、源码、有效规则、
+配置或分析器版本改变会拒绝，不覆盖旧结果或自动重跑。
+
+已有请求可选择 `analysisSource:{"kind":"request","requestId":"<existing-id>"}`：
+只读当前 Profile 请求所指的饭中固定材料，不制造新安装意图。提交和内容身份来自
+既有采集记录，分析层不重新联网证明该提交；进入分析前会按原采集清单校验完整
+文件集合、逐文件内容及登记摘要（含分析器忽略的文件），再核对实际分析快照。
+材料或清单失配时明确拒绝，不重新采集、不改写登记或自动改走 local；复用、查询
+和关联初扫也沿用此检查。local 仍分析明确选择的当前目录，不要求采集清单。
+结果写入身体绑定根的 `鱼的胃/分析/<analysisId>`，记录完整 Profile 所属身份，
+跨 Profile 拒绝读取。切换绑定不迁移旧结果。失效结果不能继续作为有效证据引用。
+
+固定依赖为 dependency-cruiser 18.8.0、ast-grep CLI 0.51.3、ts-morph 28.0.0。
+当前 native launcher 验证范围为 Windows x64；使用官方 ast-grep 可选平台包的
+直接二进制路径，安装可禁用生命周期脚本，无需全局分析器。初扫依赖的 Node 支持范围
+为 22、24 或 >=26；身体原有 Node 最低要求不变，其他 Node 版本不声称分析可用。
+DSH 内嵌 Node 模式兼容不代表真实模型已调用工具；本地 handler 验证也不代替日常对话验收。
+原有 manager v2、来源保留、releaseExact、市场兼容扩展仍按下文独立维护。
+
+支持边界：JS/TS 模块图、结构观察及有限语法追踪；初扫另有 Python/Rust/C/C++
+结构规则。其他语言、打包代码、二进制可以清点，但不保证依赖分析、反编译或提取。
+模块闭包不是能力的最小依赖；局部同名修订不是“无脑区行为”；无命中不是行为不存在。
+阶段来自人工问题；静态关系不能证明可达性、取消、卸载或资源释放。解析失败及追踪
+不完整保留 diagnostic-partial，不输出“拆分成功”或“安全可安装”。此功能没有前端、
+组件拆分、组件改写、候选安装或运行验证；它只是分析材料入口。
+
+维护入口为 `internal/analysis/`；实验命令仅封装正式模块，不在正式包内。
+独立安装包专项见 `test/analysis-tools.test.mjs`，需设
+`FISH_TEST_INSTALL_ROOT` 与全新 `FISH_ANALYSIS_TEST_ROOT`；不指向日常 Profile。
+
 > 0.0.5 提供安装来源保留修复。身体与鱼脑各自启停，不要求另一方存在、开启或先完成初始化。同宿主退出仍影响双方，不提供进程隔离。显式继续入口依赖单独维护的实验宿主扩展 v2，不随身体包安装。
 
 一个 DSH bundle，包含饭（固定上游材料）→胃（审查、依赖准备、构建）→手（受管包、决定、部署和恢复）的现有完整后端、设置页及内置 SHA-256。无需另找未发布的 fish-hand 后端。

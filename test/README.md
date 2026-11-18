@@ -6,6 +6,28 @@
 
 测试实现从 FISH_TEST_INSTALL_ROOT/node_modules/fish-body 加载；先打包并在独立目录安装，不能将变量指向源码根代替安装产物。
 
+`analysis-tools.test.mjs` 从实际 `fish_hand` 定义和 handler 验证 initial/deep、复用类型、
+五类按需查询、证据修订与截断、Profile 隔离及关闭收尾。需要独立安装包的
+`FISH_TEST_INSTALL_ROOT`、尚不存在的 `FISH_ANALYSIS_TEST_ROOT`，以及调用方明确选择的
+`FISH_ANALYSIS_REAL_SOURCE`（已有 extras 接线的源码快照，仅解析文本）。它不扫描工作区找样本。
+测试写入、示例返回和计数保存在测试根；候选入口、配置和安装脚本设有执行陷阱。
+同时保留初扫诊断和深查诊断；合并结果不会因另一份结果无语法错误而升级为完整。
+可在系统 Node 或 `ELECTRON_RUN_AS_NODE=1` 的 DSH Node 模式运行同一测试；后者不代表真实对话验收。
+
+`analysis-request-source.test.mjs` 专项使用真实采集算法生成公开合成夹具，
+不需要私人文件。设置 `FISH_TEST_INSTALL_ROOT`、尚不存在的 `FISH_REQUEST_TEST_ROOT`
+及全新的 `FISH_ANALYSIS_LOAD_LOG` 文件路径，再运行：
+
+```text
+node --import ./test/analysis-loads.mjs --import ./test/analysis-request-race.mjs --test test/analysis-request-source.test.mjs
+```
+
+子进程也必须继承这两个预加载：将相同的 `--import` 参数（使用绝对 file: URL）
+放入 `NODE_OPTIONS`。加载日志用于证明同名同长度篡改在实际分析器启动前拒绝；
+race 辅助仅在测试显式设定的夹具路径注入复制竞争。测试覆盖首次 request、
+关联初扫、后续复用/查询、清单绑定、被分析器忽略的文件、local 与 Profile 语义。
+这些 test 文件不进入发布包，正式运行不依赖它们或 experiments。
+
 独立数据绑定专项：`node --test test/distribution.test.mjs test/independent-binding.test.mjs test/binding-consumers.test.mjs`。消费者测试还需 `FISH_DSH_TEST_ANCHOR` 指向隔离 rc.5 宿主；验证原生组合中的旧 fishRoot、旧后端投影、独立绑定优先级、切根和失效后的旧事务拒绝，以及原完整性校验后已卸载 SHA 所属实例不再注册工具。
 
 backend-prepare-process.test.mjs 的环境配置：
