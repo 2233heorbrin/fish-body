@@ -54,13 +54,28 @@ function dependencies(t, a) {
       'resources-programs': ['process', 'external-resource', 'dynamic-import'], 'incidental-behavior': ['prompt-injection', 'route']
     };
     return depKinds.map((kind, i) => {
-      const scope = kind === 'implementation' ? related : a.bundle.records.filter(r => r.kind === 'observation' && (global[kind] ?? []).includes(r.detail.category));
+      const matches = r => r.kind === 'observation' && (global[kind] ?? []).includes(r.detail.category);
+      const direct = kind === 'implementation' ? related : related.filter(matches);
+      const directIds = new Set(direct.map(r => r.id));
+      const background = kind === 'implementation' ? [] : a.bundle.records.filter(r => matches(r) && !directIds.has(r.id));
+      const scope = [...direct, ...background];
       const previous = t.dependencies?.find(d => d.id === id + ':D' + (i + 1));
       const evidenceRefs = refs(previous?.evidenceRefs ?? [...new Set([...c.evidenceRefs, ...scope.slice(0,8).map(r => r.id)])], a);
+      const group = (rows, range) => ({ range, observed: rows.length, referenced: rows.filter(r => evidenceRefs.includes(r.id)).length,
+        // Candidate examples are separate from the saved decision's exact references.
+        examples: rows.slice(0,8).map(r => ({ id:r.id, file:r.coordinate?.file, line:r.coordinate?.line })), truncated: rows.length > 8 });
       return { id: id + ':D' + (i + 1), capabilityId: id, kind, evidenceRefs,
         candidateModules: kind === 'implementation' ? detail.codeModules ?? [] : [],
-        relation: kind === 'implementation' ? 'Declaration/scoped calls and module closure are candidate implementation, not a proven minimum.' : 'Whole-plugin context; relation to selected capability still requires source/semantic review.',
-        scope: { observed: scope.length, referenced: Math.min(scope.length,8), truncated: scope.length > 8 },
+        relation: '当前声明内观察与全插件背景分开；当前调用不等于功能必需，背景关联尚未证明。模块闭包不是最小依赖。',
+        scope: { observed: scope.length, referenced: scope.filter(r => evidenceRefs.includes(r.id)).length,
+          truncated: scope.some(r => !evidenceRefs.includes(r.id)),
+          direct:group(direct,'selected-declaration'),background:group(background,'whole-plugin-background'),
+          necessity:'unproven',
+          interpretation:kind==='shared-state-initialization'?'state-access 仅为语法观察，不等于记忆脑区、独立服务、必需或可删除部分；同一对象/函数可混合多种职责。'
+            :kind==='incidental-behavior'?'当前自动规则仅覆盖 prompt/route 等部分线索，未穷举拟人行为或副作用。':'观察和背景均需核对条件及实际接线，程序不代作业务分类。',
+          more:{direct:rec?{queryType:'evidence',queryOptions:{id},note:'分页读取 scopedEvidence；原始局部 ID 加上该记录的 run 命名空间。'}
+            :{note:'此为有归属的补充能力，没有程序声明范围；按该能力的实际 evidenceRefs 核查，不把补充能力 ID 当作扫描器证据。'},
+            background:{queryType:'file',note:'按示例文件分页读取记录，必要时用 view=source 核对；仅为背景，不证明与所选能力关联。'}} },
         decision: previous?.decision ?? 'pending', rationale: previous?.rationale ?? '待讨论：具体影响、必要范围及替代接线未确认。',
         origin: previous?.origin ?? { kind: 'program-candidate' }, proposedChange: previous?.proposedChange ?? null,
         businessSemanticChange: previous?.businessSemanticChange ?? 'unknown', acceptance: previous?.acceptance ?? null };
@@ -189,7 +204,7 @@ export async function taskJob(args, scope, helpers) {
   t.plugin = recordPlugin(t, dir, 'task', ctx.root);
   t.analysisKind = a.rec.kind; t.initialAnalysisId = a.rec.initialAnalysisId ?? null;
   if (op === 'read') {
-    const rows = args.taskView === 'capabilities' ? t.capabilities : args.taskView === 'dependencies' ? t.dependencies : args.taskView === 'unknowns' ? [...(t.analysisUnknowns ?? []), ...t.unknowns] : null;
+    const rows = args.taskView === 'capabilities' ? t.capabilities : args.taskView === 'dependencies' ? dependencies(t,a) : args.taskView === 'unknowns' ? [...(t.analysisUnknowns ?? []), ...t.unknowns] : null;
     return ok(rows ? { taskId:t.taskId, revision:t.revision, completeness:t.completeness, page:page(rows,options) } : overview(t));
   }
   if (op === 'output') {
@@ -219,6 +234,7 @@ export async function taskJob(args, scope, helpers) {
         target.acceptance=d.acceptIncidental === true ? {origin:o,note:text(d.acceptanceReason,'explicit incidental acceptance')} : null;
         if(target.acceptance && (target.kind!=='incidental-behavior'||o.kind!=='user'))throw Error('Incidental behavior requires separately attributed explicit user acceptance');
       }
+      t.dependencies=dependencies(t,a); // Keep scope/reference counts aligned with explicit replacements, including [].
       if(p.unknowns) {if(!Array.isArray(p.unknowns)||p.unknowns.length>80)throw Error('unknowns must be <=80 items');t.unknowns=p.unknowns.map(u=>({text:text(u.text,'unknown'),origin:origin(u.origin),evidenceRefs:refs(u.evidenceRefs ?? [],a)}));}
       // Explanatory annotations describe a plan revision, like produce/confirm;
       // they do not change choices, approval or already written output files.

@@ -1,10 +1,11 @@
 # fish-body（鱼的身体）
 
-## 胃任务（0.0.7-dev.2，分支测试版）
+## 胃任务（0.0.7-dev.3，分支测试版）
 
 本分支增加能力选择与两种产出；测试安装来源为 `github:2233heorbrin/fish-body#feat/stomach-split-tasks`，
 这些任务入口不属于此前正式标签 v0.0.6。dev.2 增加中文结果分组、具名选择和可读方案；
-dev.1 已有真实 DSH 工具调用与材料产出证据，新增中文交互的真实模型讨论及用户验收仍待完成；
+dev.3 补齐有界源码查询、直接观察/全插件背景范围和讨论核证引导，依赖不变；
+已有真实 DSH 工具调用与材料产出证据，本次补修的真实模型中文解释及用户验收仍待完成；
 本地专项与隔离浏览器验证不代替用户裁定或日常验收。版本变化可使旧分析见证失效，保留旧结果并明确选择新分析，不改写旧见证。
 设置页的胃分区与现有 `fish_hand` 共用任务服务、Profile、身体绑定和关闭/closing 门禁。
 先显式 initial / deep 或选择已有有效 analysisId，再创建任务：
@@ -38,6 +39,11 @@ origin/evidenceRefs，可补 proposedChange 和 businessSemanticChange=yes|no|un
 保留、收窄、排除或待判断均须具体理由；附带行为须独立、明确的用户归属接受，不随能力选择
 自动接受。unknowns 是带来源的补充问题，既有分析限制另行保留。
 同一分析和依赖的有效补充证据随决定保留；显式替换或清空引用仍可生效，更换分析则重置。
+
+依赖的 `scope.direct` 是所选声明内语法观察，`scope.background` 是全插件背景，均不证明业务必需。
+相关观察优先；数量、示例截断与实际决定引用分别记录，旧任务读取时补范围说明而不迁移文件。
+state-access 不自动等于记忆或独立服务；附带行为规则仅覆盖部分 prompt/route 线索，不穷举副作用。
+模型应区分当前接线、工具控制、拟人限制/奖励和返回状态，再讨论保留或替换及必要适配。
 
 模式、能力、内容或判断变化推进版本并清除原确认；旧产出保留。切换 analysisId 需新结果有效，
 并清空旧选择/判断；源码、Profile、绑定或实现见证失配拒绝旧结论。模型确认只记为模型意见，
@@ -87,10 +93,19 @@ nextSteps 和 evidenceRefs。说明名是模型表述，不是程序自动发现
 ```json
 {"action":"query","analysisId":"<returned-id>","queryType":"summary","queryOptions":{"limit":5}}
 {"action":"query","analysisId":"<returned-id>","queryType":"file","queryOptions":{"file":"index.js","line":10}}
+{"action":"query","analysisId":"<returned-id>","queryType":"file","queryOptions":{"view":"source","file":"index.js","line":10,"offset":0,"limit":5}}
 {"action":"query","analysisId":"<returned-id>","queryType":"evidence","queryOptions":{"id":"initial/E0001","limit":3}}
 {"action":"query","analysisId":"<returned-id>","queryType":"capability","queryOptions":{"name":"<candidate-name>"}}
 {"action":"query","analysisId":"<returned-id>","queryType":"phase","queryOptions":{"function":"apply","stage":"用户指定的注册阶段问题"}}
 ```
+
+file 省略 view 时仍查询已有记录；显式 `view:"source"` 才读取当前有效分析清单内的已验证 UTF-8
+快照行段。行号从1起，offset 是该行内从0起的 Unicode 码点偏移；每页最多20段、每段600码点，
+受响应预算限制。使用返回的 `page.nextLine` **和** `page.nextOffset` 续读，包括超长单行。
+返回实际行/列、行尾和截断状态，不生成证据 ID；analysisId、run 和文件坐标标识上下文归属。
+摘要明确区分已存片段截断与摘要截断，descriptionOrigin 标识作者声明，不能据此证明入口支持。
+结论涉及动作范围时，应核对配置、筛选和早退；冲突或缺少条件须明确，initial 不证明完整行为。
+源码视图不启动扫描器，不读取范围外文件或执行源码；实现见证变化仍会使旧结果失效，不能修补旧见证。
 
 `evidence` 使用返回的完整命名空间 ID；`file` 是源码相对文件名，不能用它读取任意
 结果文件。默认 5 项、最多 20 项、整个工具返回最多 16000 字节；用 `nextOffset`

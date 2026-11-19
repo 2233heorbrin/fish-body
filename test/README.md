@@ -1,5 +1,12 @@
 # 安装产物回归
 
+`analysis-context.test.mjs` 从最终真实包的 fish_hand/HTTP 入口验证显式 file source 视图、
+长描述后的拒绝条件、目录/另一入口、中文长行续读、范围拒绝和候选直接观察/全插件背景分离。
+设置 `FISH_TEST_INSTALL_ROOT`、全新 `FISH_CONTEXT_TEST_ROOT`，并沿用
+`analysis-loads.mjs` 与 `FISH_ANALYSIS_LOAD_LOG`（父子进程 NODE_OPTIONS 均导入），执行
+`node --test test/analysis-context.test.mjs`。每运行时三次合成 initial（含固定 request），deep/真实样本重扫为0；
+覆盖既有决定与引用的保留/删除、旧目录、说明失效和历史产物。确定性材料验证不代表真实模型理解。
+
 `stomach-tasks.test.mjs` 从真实独立包运行胃任务及生产 HTTP/fish_hand 接口。
 设置 `FISH_TEST_INSTALL_ROOT` 为独立安装根、`FISH_TASK_TEST_ROOT` 为尚不存在的隔离目录，
 运行 `node --test test/stomach-tasks.test.mjs`。使用自建混合插件和真实采集清单，

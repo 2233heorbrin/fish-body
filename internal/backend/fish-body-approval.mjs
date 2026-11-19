@@ -87,7 +87,7 @@ const CLOSING_MESSAGE = '鱼的身体正在关闭：当前操作完成后退出�
 const FULL_TOOL_DESCRIPTION = '鱼的手：submit 把 GitHub 链接下载到饭并登记安装意图；review 在胃里生成审查材料并返回待批项；'
   + 'approve 首次需真实授权与审查；同一请求重试复用有效批准，新增依赖脚本返回待授权范围；'
   + 'reject 拒绝；status 列出已登记插件。analyze 显式选择 initial 初扫或 deep 全源码深查，analysisSource 明确选择本地源码目录或既有请求的固定材料；返回 analysisId。'
-  + 'query 用 analysisId 按 summary/evidence/file/capability/phase 分页取证，不启动分析器。新 deep 可用 initialAnalysisId 关联同源初扫。'
+  + 'query 用 analysisId 按 summary/evidence/file/capability/phase 分页取证，不启动分析器；file 默认查记录，显式 view=source 才读取有界源码上下文。新 deep 可用 initialAnalysisId 关联同源初扫。'
   + 'task 以 compatibility/reverse 创建任务；list/read 分页读取，update 带 expectedRevision 记录能力选择及有来源的判断/依赖决定，produce 产出方案或组件材料，output 分页读取，confirm 只确认具体版本而不授权执行。'
   + '只产出分析材料和拆分依据，不执行候选代码，不代表安全批准或拆分成功；不调用模型。本工具不自行批准、不安装插件。' + DISCUSSION_GUIDE;
 
@@ -345,13 +345,14 @@ export function fishHandToolDefinition({ orchestrator = null, getOrch = null, fr
         initialAnalysisId: { type: 'string', description: '仅新 deep：关联同一源码的有效初扫，保留修订/冲突/补充关系；不重新初扫' },
         queryType: { type: 'string', enum: ['summary', 'evidence', 'file', 'capability', 'phase'] },
         queryOptions: { type: 'object', additionalProperties: false, properties: {
+          view: { type: 'string', enum: ['source'], description: '仅 file：显式读取当前有效分析的已验证快照；省略保持原记录查询。不产生证据 ID，不证明运行或最小依赖' },
           id: { type: 'string', description: 'evidence：完整带运行命名空间的证据 ID，例如 deep/M0001' },
           file: { type: 'string', description: '源码相对文件名，用于 file 或 phase 选择，不作为任意结果路径读取' },
-          line: { type: 'integer', minimum: 1 }, name: { type: 'string', description: 'capability：已有能力候选名' },
+          line: { type: 'integer', minimum: 1, description: 'source 视图：从1起的源码行号，默认1；续读使用 nextLine' }, name: { type: 'string', description: 'capability：已有能力候选名' },
           function: { type: 'string', description: 'phase：明确函数名；有限静态关系，不证明执行或释放' },
           stage: { type: 'string', description: 'phase：可选人工问题标签，不是自动业务识别' },
-          offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 20 },
-        }, description: '默认5项、最多20项及16000字节响应预算；使用返回的 nextOffset 继续读取' },
+          offset: { type: 'integer', minimum: 0, description: '记录视图为条目偏移；source 视图为指定行内从0起的 Unicode 码点偏移' }, limit: { type: 'integer', minimum: 1, maximum: 20 },
+        }, description: '默认5项、最多20项及16000字节响应预算；记录用 nextOffset；source 必须同时使用 nextLine 和 nextOffset，可续读超长行' },
         source: { type: 'string', description: 'submit：GitHub 仓库或 /tree/<ref>/<subdir> 链接' },
         ref: {type:'string',description:'submit：明确分支/标签/提交；带斜杠分支无法唯一确定时与 subdir 一起提供'},
         subdir: {type:'string',description:'submit：仓库内插件相对子目录，例如 plugins/github-manager'},

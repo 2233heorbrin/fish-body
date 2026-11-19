@@ -77,8 +77,13 @@ function coordinate(value,kind){
     unit:kind==='initial'?'UTF-8 byte offsets (ast-grep)':'UTF-16 code units (ts-morph)',original:l};
 }
 function summarize(r){
+  const stored=r.detail.snippet||r.detail.location?.snippet||r.detail.use?.snippet||r.detail.call?.snippet||'';
+  const storedSnippetTruncated=!!r.detail.snippetTruncated, summarySnippetTruncated=stored.length>220;
   return {id:r.id,originalId:r.originalId,localId:r.localId,idOrigin:r.idOrigin,run:r.run,kind:r.kind,layer:r.layer,file:r.coordinate?.file,line:r.coordinate?.line,coordinate:r.coordinate,
-    label:r.label,status:statusSummary(r.status),compilerBoundary:r.kind==='wiring'?{receiverAny:r.detail.compilerReceiver.type.any,directMemberDeclarations:r.detail.compilerMember.declarations.length,attribution:r.detail.attribution}:r.kind==='method'?{calleeAny:r.detail.compilerCalleeType.any,interpretation:r.detail.confidence}:undefined,snippet:(r.detail.snippet||r.detail.location?.snippet||r.detail.use?.snippet||r.detail.call?.snippet||'').slice(0,220),
+    label:r.label,status:statusSummary(r.status),compilerBoundary:r.kind==='wiring'?{receiverAny:r.detail.compilerReceiver.type.any,directMemberDeclarations:r.detail.compilerMember.declarations.length,attribution:r.detail.attribution}:r.kind==='method'?{calleeAny:r.detail.compilerCalleeType.any,interpretation:r.detail.confidence}:undefined,snippet:stored.slice(0,220),
+    snippetTruncated:storedSnippetTruncated||summarySnippetTruncated,storedSnippetTruncated,summarySnippetTruncated,
+    ...(r.detail.declaredDescription||r.detail.description?{descriptionOrigin:'author-declared; not verified runtime behavior'}:{}),
+    sourceContext:r.coordinate?.file?{queryType:'file',queryOptions:{view:'source',file:r.coordinate.file,line:r.coordinate.line||1,offset:0,limit:5}}:undefined,
     raw:r.raw,links:r.links||[],more:'evidence '+r.id};
 }
 export function compose(sourceArg,outArg,runs){
@@ -167,12 +172,48 @@ function paginate(rows,options){
   }
   return {offset,limit,total:rows.length,items,nextOffset:i<rows.length?i:null,hasMore:i<rows.length,bound:'max 20 rows / 10000 item bytes; details are paged JSON-pointer parts'};
 }
+// Explicit source view of an already validated run. No live source reads or candidate imports.
+function sourcePage(b,options){
+  const file=options.file;
+  if(typeof file!=='string'||!file||/[\\:\0]/.test(file)||path.isAbsolute(file)||file.split('/').some(p=>!p||p==='.'||p==='..'))
+    throw Error('Source view requires a canonical relative file from this analysis scope');
+  const run=b.runs.find(r=>read(path.join(r.path,'inventory.json')).files.some(f=>f.file===file));
+  if(!run)throw Error('Source file is outside this analysis inventory');
+  const root=path.join(run.path,'source-snapshot'),target=path.join(root,file);
+  // Reuse the scanner walk scope, including its link and ignored-directory exclusions.
+  if(fs.lstatSync(root).isSymbolicLink()||!walk(root).includes(file)
+    ||fs.realpathSync.native(target)!==path.join(fs.realpathSync.native(root),file))throw Error('Source reference escapes verified snapshot scope');
+  const bytes=fs.readFileSync(target);
+  if(bytes.includes(0))throw Error('Source view supports UTF-8 text only; binary material remains a source clue');
+  const text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes),split=text.split(/(\r\n|\n|\r)/);
+  const lines=[];for(let i=0;i<split.length;i+=2)lines.push({text:split[i],ending:split[i+1]||''});
+  let line=Number(options.line??1),offset=Number(options.offset??0);const limit=Number(options.limit??5);
+  if(!Number.isSafeInteger(line)||line<1||line>lines.length||!Number.isSafeInteger(offset)||offset<0
+    ||!Number.isInteger(limit)||limit<1||limit>20)throw Error('Source view requires line=1..totalLines, offset>=0, limit=1..20');
+  if(offset>Array.from(lines[line-1].text).length)throw Error('Source offset exceeds the selected line');
+  const items=[];
+  while(line<=lines.length&&items.length<limit){
+    const chars=Array.from(lines[line-1].text),end=Math.min(chars.length,offset+600),continued=end<chars.length;
+    const item={file,line,column:offset+1,endColumn:end+1,text:chars.slice(offset,end).join(''),continued,
+      ...(continued?{}:{lineEnding:lines[line-1].ending})};
+    if(items.length&&Buffer.byteLength(JSON.stringify([...items,item]))>8000)break;
+    items.push(item);
+    if(continued)offset=end;else{line++;offset=0;}
+  }
+  const hasMore=line<=lines.length;
+  return {context:{view:'source',file,run:run.name,origin:'verified source-snapshot',coordinateUnit:'1-based line/column; Unicode code points',
+      evidenceId:null,boundary:'Source context only, not scanner evidence or reachability, runtime, minimum-dependency or safety proof'},
+    page:{line:Number(options.line??1),offset:Number(options.offset??0),limit,totalLines:lines.length,items,hasMore,truncated:hasMore,
+      nextLine:hasMore?line:null,nextOffset:hasMore?offset:null,
+      bound:'max 20 segments / 8000 item bytes / 600 Unicode code points per segment; continue with both nextLine and nextOffset'}};
+}
 export async function query(dirArg,command,options={}){
   const dir=path.resolve(dirArg),start=performance.now(),b=read(path.join(dir,'bundle.json')),validity=validateBundle(dir,b);
-  let result={protocol,command,conditions:options,source:{path:b.source,bundle:dir,runs:b.runs.map(r=>({name:r.name,path:r.path,kind:r.kind,rule:r.metadata.rules||r.metadata.ruleVersion,versions:r.metadata.version||r.metadata.analyzers}))},validity};
+  let result={protocol,command,conditions:options,analyzerExecutions:0,source:{path:b.source,bundle:dir,runs:b.runs.map(r=>({name:r.name,path:r.path,kind:r.kind,rule:r.metadata.rules||r.metadata.ruleVersion,versions:r.metadata.version||r.metadata.analyzers}))},validity};
   if(!validity.valid){result.state='invalid-no-analysis-rerun';}
   else{
     result.state=validity.runs.some(r=>r.completeness.mode==='diagnostic-partial')?'reused-diagnostic-partial':'reused-evidence-with-known-limits';
+    if(options.view!==undefined&&(command!=='file'||options.view!=='source'))throw Error('view is only supported as file view=source; omit it for record queries');
     let rows=[];
     if(command==='summary'){
       rows=[{source:b.source,scope:compareSource(b.source,path.join(b.runs[0].path,'source-snapshot')),records:b.records.length,capabilities:b.capabilities.length,warning:b.warning},...b.capabilities,...b.records.filter(r=>['configuration','unknown','ignored','failure'].includes(r.kind)).map(summarize)];
@@ -181,8 +222,12 @@ export async function query(dirArg,command,options={}){
       if(!rec)throw Error('Use exact namespaced ID; bare or unknown IDs are rejected');
       result.evidence={...summarize(rec),links:rec.links||[]};rows=parts(rec.detail);
     }else if(command==='file'){
-      const line=options.line?Number(options.line):null;
-      rows=b.records.filter(r=>r.coordinate?.file===options.file&&(!line||r.coordinate.line<=line&&(r.coordinate.original?.endLine||r.coordinate.line)>=line)).map(summarize);
+      if(options.view==='source'){
+        const source=sourcePage(b,options);result.sourceContext=source.context;result.page=source.page;
+      }else{
+        const line=options.line?Number(options.line):null;
+        rows=b.records.filter(r=>r.coordinate?.file===options.file&&(!line||r.coordinate.line<=line&&(r.coordinate.original?.endLine||r.coordinate.line)>=line)).map(summarize);
+      }
     }else if(command==='capability'||command==='phase'){
       if(command==='capability'&&!options.name)throw Error('capability requires --name');
       if(command==='phase'&&!options.function&&!options.stage)throw Error('phase requires --function or explicit --stage label and function');
@@ -212,7 +257,7 @@ export async function query(dirArg,command,options={}){
         }
       }
     }else throw Error('Commands: summary, evidence, file, capability, phase');
-    result.page=paginate(rows,options);
+    result.page??=paginate(rows,options);
   }
   result.elapsedMs=Math.round(performance.now()-start);
   // Return actual encoded size (stabilizes after the digit count settles).

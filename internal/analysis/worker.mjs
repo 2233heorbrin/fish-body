@@ -113,6 +113,7 @@ export async function runAnalysisJob({ args, scope }) {
     const options = args.queryOptions ?? {};
     if (!options || typeof options !== 'object' || Array.isArray(options)) throw Error('queryOptions must be an object');
     const result = await query(path.join(dir, rec.bundle), args.queryType, options);
+    if (result.sourceContext) result.sourceContext.analysisId = rec.analysisId;
     return { ok: result.validity.valid, action: 'query', result: { analysisId: rec.analysisId, kind: rec.kind,
       ...recordMetadata(rec, dir, 'analysis'), ...result, conversation: conversationGuide(rec) } };
   }
