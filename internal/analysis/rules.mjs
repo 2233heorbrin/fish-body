@@ -1,5 +1,28 @@
 // Syntactic observations only: names do not establish runtime semantics.
 export const ruleVersion = 'spike-2';
+export const entryRuleVersion = 'entry-conditions-1';
+export function classifyEntrySyntax(text) {
+  const source = String(text || '').trim().replace(/\s+/g, ' ');
+  const classes = [];
+  const negatedUnion = /^!\S+(?:\s*\|\|\s*!\S+)+$/.test(source);
+  const negatedSingle = /^!\S+$/.test(source) && !negatedUnion;
+  if (negatedUnion) classes.push('negated-union-guard');
+  if (negatedSingle) classes.push('negated-single-guard');
+  if (/(?:===|==|!==|!=)/.test(source)) classes.push('equality-guard');
+  if (/^(?:return|throw)\b/.test(source)) classes.push('early-terminal');
+  return classes;
+}
+// Display-only regex catalog. v2 §2.1: must NOT be used to produce action values;
+// action values come exclusively from AST-confirmed literals in morph-scan.mjs.
+export function literalActionCatalog(text, limit = 24) {
+  const values = [], pattern = /'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g;
+  for (const match of String(text || '').matchAll(pattern)) {
+    const value = match[0].slice(1, -1);
+    if (!values.includes(value)) values.push(value);
+    if (values.length >= limit) break;
+  }
+  return values;
+}
 export const languages = {
   '.js':['JavaScript','call_expression'], '.mjs':['JavaScript','call_expression'], '.cjs':['JavaScript','call_expression'],
   '.ts':['TypeScript','call_expression'], '.tsx':['Tsx','call_expression'],

@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { writeJson } from './io.mjs';
 import { recordEntries, findRecordDirectory, newRecordDirectory, sourcePlugin, recordMetadata, recordPlugin } from './records.mjs';
 import { conversationGuide } from './conversation.mjs';
+import { ownershipIndex, ownershipOf } from './unified.mjs';
 const read = f => JSON.parse(fs.readFileSync(f, 'utf8'));
 const modes = ['compatibility', 'reverse'], categories = ['tool', 'brain', 'mixed', 'unknown'];
 const depKinds = ['implementation', 'shared-state-initialization', 'lifecycle-release', 'resources-programs', 'incidental-behavior', 'unresolved-relation'];
@@ -46,8 +47,13 @@ function classification(a) {
     evidenceRefs: [...tool.slice(0,4), ...brain.slice(0,4)].map(r => r.id), confirmed: false };
 }
 function dependencies(t, a) {
+  // One shared attribution helper with query; no slice(0,12) codeModules shortcut.
+  const index = ownershipIndex(a.bundle);
   return t.selected.flatMap(id => {
     const c = t.capabilities.find(c => c.id === id), rec = a.bundle.records.find(r => r.id === id), detail = rec?.detail ?? {};
+    const capMeta = a.bundle.capabilities.find(x => x.id === id) ?? {};
+    const cap = { id, name: c?.name, file: capMeta.file ?? rec?.coordinate?.file ?? null,
+      codeModules: detail.codeModules ?? [], scopedEvidence: detail.scopedEvidence ?? [] };
     const related = a.bundle.records.filter(r => r.run === rec?.run && (detail.scopedEvidence ?? []).includes(r.originalId));
     const global = {
       'shared-state-initialization': ['state-access'], 'lifecycle-release': ['listener', 'timer', 'lifecycle'],
@@ -55,27 +61,71 @@ function dependencies(t, a) {
     };
     return depKinds.map((kind, i) => {
       const matches = r => r.kind === 'observation' && (global[kind] ?? []).includes(r.detail.category);
-      const direct = kind === 'implementation' ? related : related.filter(matches);
+      // Attribute every candidate first, count the real totals, then paginate. Dedup keeps run + namespace (r.id).
+      const attributed = kind === 'implementation'
+        ? a.bundle.records.filter(r => r.kind === 'entry-condition' &&
+            ((detail.scopedEvidence ?? []).includes(r.detail?.function) || (detail.codeModules ?? []).includes(r.coordinate?.file)))
+            .map(r => ({ rec: r, own: ownershipOf(r, index, cap) }))
+        : [];
+      const seen = new Set(), attributedUnique = [];
+      for (const item of attributed) { if (seen.has(item.rec.id)) continue; seen.add(item.rec.id); attributedUnique.push(item); }
+      const ownById = new Map(attributedUnique.map(x => [x.rec.id, x.own]));
+      const ownOf = r => ownById.get(r.id) ?? ownershipOf(r, index, cap);
+      const ecDirect = attributedUnique.filter(x => x.own.scope === 'direct').map(x => x.rec);
+      const ecAssociated = attributedUnique.filter(x => x.own.scope === 'associated').map(x => x.rec);
+      // Unknown is not silently promoted: it stays in the background bucket with its explicit reason.
+      const ecBackground = attributedUnique.filter(x => x.own.scope === 'background' || x.own.scope === 'unknown').map(x => x.rec);
+      const direct = kind === 'implementation'
+        ? [...ecDirect, ...related.filter(r => r.kind !== 'entry-condition' && !ecDirect.some(e => e.id === r.id))]
+        : related.filter(matches);
       const directIds = new Set(direct.map(r => r.id));
-      const background = kind === 'implementation' ? [] : a.bundle.records.filter(r => matches(r) && !directIds.has(r.id));
-      const scope = [...direct, ...background];
+      const background = kind === 'implementation'
+        ? [...ecBackground, ...a.bundle.records.filter(r => matches(r) && !directIds.has(r.id) && !ecBackground.some(e => e.id === r.id))]
+        : a.bundle.records.filter(r => matches(r) && !directIds.has(r.id));
+      const scopeRows = [...direct, ...ecAssociated, ...background];
       const previous = t.dependencies?.find(d => d.id === id + ':D' + (i + 1));
-      const evidenceRefs = refs(previous?.evidenceRefs ?? [...new Set([...c.evidenceRefs, ...scope.slice(0,8).map(r => r.id)])], a);
+      const evidenceRefs = refs(previous?.evidenceRefs ?? [...new Set([...c.evidenceRefs, ...scopeRows.slice(0,8).map(r => r.id)])], a);
       const group = (rows, range) => ({ range, observed: rows.length, referenced: rows.filter(r => evidenceRefs.includes(r.id)).length,
-        // Candidate examples are separate from the saved decision's exact references.
-        examples: rows.slice(0,8).map(r => ({ id:r.id, file:r.coordinate?.file, line:r.coordinate?.line })), truncated: rows.length > 8 });
+        examples: rows.slice(0,8).map(r => ({ id:r.id, file:r.coordinate?.file, line:r.coordinate?.line,
+          ownershipScope:r.kind==='entry-condition'?ownOf(r).scope:null })), truncated: rows.length > 8 });
+      const entryRows = attributedUnique.map(({rec: r, own}) => {
+        const e = r.detail.entry ?? {}, cands = e.actionCandidates ?? [];
+        return { id: r.id, run: r.run, label: r.label, file: r.coordinate?.file ?? null, line: r.coordinate?.line ?? null,
+          ownership:{ scope:own.scope, basis:own.basis.slice(0,1), path:own.path.slice(0,1), ambiguity:own.ambiguity.slice(0,1),
+            reason:String(own.reason??'').slice(0,80) },
+          ownershipScope:own.scope,
+          acceptsAction:e.acceptsAction?.action ?? null, acceptsActionExplicit:true,
+          actionCandidates:cands.length, actionCandidateActions:cands.slice(0,2).map(x=>x.action??null),
+          comparisons:(e.comparisons ?? []).length, earlyExits:(e.earlyExits ?? []).length,
+          permissionGate:e.permissionGate?.expression ?? null,
+          truncated:cands.length>2||(e.comparisons ?? []).length>2||(e.earlyExits ?? []).length>2 };
+      });
+      const backgroundFile = cap.file ?? (detail.codeModules ?? [])[0] ?? capMeta.file ?? null;
+      const more = {
+        direct: rec
+          ? { queryType:'entry-conditions', queryOptions:{ run:rec.run, scope:'direct', name:c?.name, offset:0, limit:5 },
+              note:'按 run 枚举 direct 入口条件。' }
+          : { note:'补充能力无程序声明范围；按实际 evidenceRefs 核查。' },
+        associated: { queryType:'entry-conditions', queryOptions:{ run:rec?.run??null, scope:'associated', name:c?.name, offset:0, limit:5 },
+          note:'带边关联，保留 path，不并入 direct。' },
+        background: { queryType:'file', queryOptions:{ view:'source', file:backgroundFile, offset:0, limit:5 },
+          note:'模块闭包/未定归属，按文件或 evidence 读取。' }
+      };
       return { id: id + ':D' + (i + 1), capabilityId: id, kind, evidenceRefs,
         candidateModules: kind === 'implementation' ? detail.codeModules ?? [] : [],
         relation: '当前声明内观察与全插件背景分开；当前调用不等于功能必需，背景关联尚未证明。模块闭包不是最小依赖。',
-        scope: { observed: scope.length, referenced: scope.filter(r => evidenceRefs.includes(r.id)).length,
-          truncated: scope.some(r => !evidenceRefs.includes(r.id)),
-          direct:group(direct,'selected-declaration'),background:group(background,'whole-plugin-background'),
+        scope: { observed: scopeRows.length, referenced: scopeRows.filter(r => evidenceRefs.includes(r.id)).length,
+          truncated: scopeRows.some(r => !evidenceRefs.includes(r.id)),
+          direct:group(direct,'selected-declaration'), associated:group(ecAssociated,'traceable-call-edge'),
+          background:group(background,'module-and-unattributed-background'),
+          entryConditions:entryRows.slice(0,3), entryConditionsTotal:entryRows.length,
+          entryConditionsNextOffset:entryRows.length>3?3:null,
+          buckets:{ direct:ecDirect.length, associated:ecAssociated.length, background:ecBackground.length },
           necessity:'unproven',
-          interpretation:kind==='shared-state-initialization'?'state-access 仅为语法观察，不等于记忆脑区、独立服务、必需或可删除部分；同一对象/函数可混合多种职责。'
+          interpretation:kind==='implementation'?'entry-condition 仅语法候选：先按 ownership 归属（direct/associated/background/unknown），再统计与分页；条件不等于运行时必经或功能必需；模块闭包永不进 direct，三桶各有 queryOptions。'
+            :kind==='shared-state-initialization'?'state-access 仅为语法观察，不等于记忆脑区、独立服务、必需或可删除部分；同一对象/函数可混合多种职责。'
             :kind==='incidental-behavior'?'当前自动规则仅覆盖 prompt/route 等部分线索，未穷举拟人行为或副作用。':'观察和背景均需核对条件及实际接线，程序不代作业务分类。',
-          more:{direct:rec?{queryType:'evidence',queryOptions:{id},note:'分页读取 scopedEvidence；原始局部 ID 加上该记录的 run 命名空间。'}
-            :{note:'此为有归属的补充能力，没有程序声明范围；按该能力的实际 evidenceRefs 核查，不把补充能力 ID 当作扫描器证据。'},
-            background:{queryType:'file',note:'按示例文件分页读取记录，必要时用 view=source 核对；仅为背景，不证明与所选能力关联。'}} },
+          more },
         decision: previous?.decision ?? 'pending', rationale: previous?.rationale ?? '待讨论：具体影响、必要范围及替代接线未确认。',
         origin: previous?.origin ?? { kind: 'program-candidate' }, proposedChange: previous?.proposedChange ?? null,
         businessSemanticChange: previous?.businessSemanticChange ?? 'unknown', acceptance: previous?.acceptance ?? null };

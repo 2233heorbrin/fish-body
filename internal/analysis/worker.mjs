@@ -10,7 +10,7 @@ import { conversationGuide } from './conversation.mjs';
 
 const read = f => JSON.parse(fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, ''));
 const kinds = new Set(['initial', 'deep']);
-const queries = new Set(['summary', 'evidence', 'file', 'capability', 'phase']);
+const queries = new Set(['summary', 'evidence', 'file', 'capability', 'phase', 'entry-conditions']);
 const idPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 function checkId(id) { if (typeof id !== 'string' || !idPattern.test(id)) throw Error('FH_ANALYSIS_ID_INVALID: use a backend-issued analysisId, not a path'); }
 function fixedSourceError(reason) {
@@ -103,7 +103,7 @@ export async function runAnalysisJob({ args, scope }) {
   }
   const ctx = context(scope);
   if (args.action === 'query') {
-    if (!queries.has(args.queryType)) throw Error('queryType: summary, evidence, file, capability or phase required');
+    if (!queries.has(args.queryType)) throw Error('queryType: summary, evidence, file, capability, phase or entry-conditions required');
     const { dir, rec } = loadRecord(ctx, args.analysisId);
     if (!['ready', 'diagnostic-partial'].includes(rec.status)) throw Error('Analysis is not a completed result: ' + rec.status);
     validateSavedSources(rec, ctx, dir);

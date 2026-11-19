@@ -3,6 +3,24 @@ import { Node, SyntaxKind, ts } from 'ts-morph';
 export { Node, SyntaxKind, ts };
 export const callable=n=>!!n&&(Node.isFunctionDeclaration(n)||Node.isMethodDeclaration(n)||Node.isArrowFunction(n)||Node.isFunctionExpression(n)||Node.isConstructorDeclaration(n));
 export const owner=n=>n.getFirstAncestor(callable);
+// The single unwrapping path used before literal detection (v2 §2.1).
+// Callers must still confirm StringLiteral / NoSubstitutionTemplateLiteral;
+// unwrapping alone never turns an identifier or call into an action value.
+export function unwrapExpression(node){
+  let current=node;
+  while(current&&(Node.isParenthesizedExpression(current)||Node.isAsExpression(current)||Node.isNonNullExpression(current)))current=current.getExpression();
+  return current;
+}
+export function directTerminal(statement){
+  if(!statement)return null;
+  if(Node.isReturnStatement(statement))return {action:'return',node:statement};
+  if(Node.isThrowStatement(statement))return {action:'throw',node:statement};
+  if(Node.isBlock(statement)){
+    const statements=statement.getStatements();
+    return statements.length===1?directTerminal(statements[0]):null;
+  }
+  return null;
+}
 export const nodeKey=n=>n?`${n.getSourceFile().getFilePath()}:${n.getStart()}:${n.getEnd()}:${n.getKindName()}`:'none';
 export function member(node) {
   if(Node.isPropertyAccessExpression(node))return {base:node.getExpression(),name:node.getName(),keyNode:node.getNameNode(),computed:false};

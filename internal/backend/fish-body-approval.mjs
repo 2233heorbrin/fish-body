@@ -66,7 +66,7 @@ function jsonResponse(request, value, status = 200) {
   });
 }
 
-/** 编排器来源：显式注入优先，其次按框架根构造（生产 = D:/deepseek框架）。 */
+/** 编排器来源：显式注入优先，其次按框架根构造（生产环境提供框架根）。 */
 export function resolveOrchestrator({ orchestrator = null, frameworkRoot = null, mode = null } = {}) {
   if (orchestrator) return orchestrator;
   const root = frameworkRoot ?? process.env.FISH_HAND_FRAMEWORK_ROOT ?? null;
@@ -343,7 +343,7 @@ export function fishHandToolDefinition({ orchestrator = null, getOrch = null, fr
         } },
         analysisId: { type: 'string', description: 'query 必填，后端返回的结果 ID；analyze 可用同类型有效 ID 复用。不接受结果文件路径；失效时明确新建，不自动重跑' },
         initialAnalysisId: { type: 'string', description: '仅新 deep：关联同一源码的有效初扫，保留修订/冲突/补充关系；不重新初扫' },
-        queryType: { type: 'string', enum: ['summary', 'evidence', 'file', 'capability', 'phase'] },
+        queryType: { type: 'string', enum: ['summary', 'evidence', 'file', 'capability', 'phase', 'entry-conditions'] },
         queryOptions: { type: 'object', additionalProperties: false, properties: {
           view: { type: 'string', enum: ['source'], description: '仅 file：显式读取当前有效分析的已验证快照；省略保持原记录查询。不产生证据 ID，不证明运行或最小依赖' },
           id: { type: 'string', description: 'evidence：完整带运行命名空间的证据 ID，例如 deep/M0001' },
@@ -351,6 +351,8 @@ export function fishHandToolDefinition({ orchestrator = null, getOrch = null, fr
           line: { type: 'integer', minimum: 1, description: 'source 视图：从1起的源码行号，默认1；续读使用 nextLine' }, name: { type: 'string', description: 'capability：已有能力候选名' },
           function: { type: 'string', description: 'phase：明确函数名；有限静态关系，不证明执行或释放' },
           stage: { type: 'string', description: 'phase：可选人工问题标签，不是自动业务识别' },
+          run: { type: 'string', description: 'entry-conditions：已存在的分析 run 名；用于按 run 枚举入口候选' },
+          scope: { type: 'string', enum: ['direct', 'associated', 'background', 'all'], description: 'entry-conditions：归属分桶；all 返回全部且保留 run 命名空间' },
           offset: { type: 'integer', minimum: 0, description: '记录视图为条目偏移；source 视图为指定行内从0起的 Unicode 码点偏移' }, limit: { type: 'integer', minimum: 1, maximum: 20 },
         }, description: '默认5项、最多20项及16000字节响应预算；记录用 nextOffset；source 必须同时使用 nextLine 和 nextOffset，可续读超长行' },
         source: { type: 'string', description: 'submit：GitHub 仓库或 /tree/<ref>/<subdir> 链接' },
