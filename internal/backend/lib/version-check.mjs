@@ -42,7 +42,9 @@ function defaultFetch(url) {
 
 /* 默认 npm 元数据读取：沿用现有 npmCommand（node + npm-cli.js），只读 view，无安装脚本。 */
 function defaultNpmReader(packageName) {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._@/-]{0,200}$/.test(packageName)) throw Object.assign(new Error('包名不合法'), { code: 'E-BAD-PACKAGE' })
+  // 允许 @scope/name 形如的首字符 @（market-source 真实会落 @scope 包），其余注入边界不回退：
+  // 仍禁止参数分隔字符（空格/分号/管道）、前导连字符、路径穿越与超长包名。
+  if (!/^@?[A-Za-z0-9][A-Za-z0-9._@/-]{0,200}$/.test(packageName)) throw Object.assign(new Error('包名不合法'), { code: 'E-BAD-PACKAGE' })
   const cli = npmCommand()
   const out = execFileSync(cli.exe, [...cli.args, 'view', packageName, 'version', '--json'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 60000, env: cli.env })

@@ -111,24 +111,44 @@ function scanSources(base, byId, hint, root, depth) {
   }
 }
 
-/** npm 来源从 <饭>/npm/<package>/<id>/材料/来源.json 读取。 */
+/**
+ * npm 来源从 <饭>/npm/<package>/<id>/材料/来源.json 读取。
+ * 真实落盘（market-source.mjs ingestNpmPublished）：join(npmRoot, record.packageName, record.id)。
+ * 有 scope 的包 packageName='@scope/name' 会形成三层 npm/@scope/name/<id>/材料/来源.json，
+ * 无 scope 的包是两层 npm/<pkg>/<id>/材料/来源.json。两种布局都要能列出来。
+ */
 function scanNpm(riceRoot, byId, root) {
   const npmRoot = join(riceRoot, 'npm')
   if (!isDir(npmRoot)) return
   let packages = []
   try { packages = readdirSync(npmRoot) } catch { return }
-  for (const pkg of packages) {
-    const pkgDir = join(npmRoot, pkg)
-    if (!isDir(pkgDir)) continue
-    let ids = []
-    try { ids = readdirSync(pkgDir) } catch { continue }
-    for (const id of ids) {
-      const material = join(pkgDir, id, '材料', '来源.json')
-      if (!existsSync(material)) continue
-      const source = safeJson(material)
-      const key = `npm:${pkg}/${id}`
-      if (byId.has(key)) continue
-      byId.set(key, normalizeItem({ id: key, source, doc: {}, dir: join(pkgDir, id), hint: 'npm', root }))
+  for (const first of packages) {
+    const firstDir = join(npmRoot, first)
+    if (!isDir(firstDir)) continue
+    const scoped = first.startsWith('@')
+    // scope 目录：npm/@scope/<name>/<id>/材料；普通目录：npm/<pkg>/<id>/材料
+    const packageDirs = []
+    if (scoped) {
+      let names = []
+      try { names = readdirSync(firstDir) } catch { continue }
+      for (const name of names) {
+        const dir = join(firstDir, name)
+        if (isDir(dir)) packageDirs.push({ dir, packageName: `${first}/${name}` })
+      }
+    } else {
+      packageDirs.push({ dir: firstDir, packageName: first })
+    }
+    for (const { dir: pkgDir, packageName } of packageDirs) {
+      let ids = []
+      try { ids = readdirSync(pkgDir) } catch { continue }
+      for (const id of ids) {
+        const material = join(pkgDir, id, '材料', '来源.json')
+        if (!existsSync(material)) continue
+        const source = safeJson(material)
+        const key = `npm:${packageName}/${id}`
+        if (byId.has(key)) continue
+        byId.set(key, normalizeItem({ id: key, source, doc: {}, dir: join(pkgDir, id), hint: 'npm', root }))
+      }
     }
   }
 }
@@ -177,22 +197,55 @@ export function publicSources(options) {
   return listRiceSources(options).map(({ _meta, ...item }) => item)
 }
 
+/**
+ * 统计分析任务。现行 tasks.mjs 经 records.mjs newRecordDirectory 把新任务写在
+ * 任务/<插件>-拆分任务/<id>/task.json（外层拆分目录 + 内层 UUID 任务目录）；
+ * 历史任务仍在 任务/<id>/task.json。两种布局都要数到，且不去重误计无关数据。
+ * 只读 task.json，校验 schema/taskId 与目录名一致，不伪造 phase。
+ */
 function countTasks(root) {
   const base = join(root, '鱼的胃', '任务')
   if (!isDir(base)) return { count: 0, phases: {} }
   let count = 0
   const phases = {}
-  for (const name of readdirSync(base)) {
-    const file = join(base, name, 'task.json')
-    if (!existsSync(file)) continue
+  const counted = new Set()
+  const consider = (dir, name) => {
+    const file = join(dir, 'task.json')
+    if (!existsSync(file) || counted.has(file)) return
     const task = safeJson(file)
-    if (task?.taskId !== name && task?.schema !== 'fish-stomach-task/v1') continue
+    if (task?.taskId !== name && task?.schema !== 'fish-stomach-task/v1') return
+    counted.add(file)
     count++
     const phase = text(task.phase) || 'unknown'
     phases[phase] = (phases[phase] ?? 0) + 1
   }
+  let outers = []
+  try { outers = readdirSync(base) } catch { return { count: 0, phases: {} } }
+  for (const outer of outers) {
+    const group = join(base, outer)
+    if (!isDir(group)) continue
+    // 旧布局：任务/<id>/task.json
+    consider(group, outer)
+    // 现行拆分布局：任务/<插件>-拆分任务/<id>/task.json
+    let inners = []
+    try { inners = readdirSync(group) } catch { continue }
+    for (const inner of inners) {
+      const innerDir = join(group, inner)
+      if (isDir(innerDir)) consider(innerDir, inner)
+    }
+  }
   return { count, phases }
 }
+
+/* 真实 phase 取值，只读核实自 internal/analysis/tasks.mjs 状态机（:245/:291/:298/:302）：
+ * 未产出：selection-pending（刚创建）、plan-pending（计划待改）；
+ * 已产出：materials-produced（reverse 产出材料）、plan-awaiting-confirmation（compatibility 产出方案）；
+ * 已确认：materials-confirmed / model-reviewed-awaiting-user / confirmed-with-open-questions / confirmed-awaiting-separate-execution。
+ * 只有「已产出或已确认」才计入「已产出方案或材料」，未产出阶段一律不计，杜绝误计。 */
+const PRODUCED_PHASES = new Set([
+  'materials-produced', 'plan-awaiting-confirmation', 'materials-confirmed',
+  'model-reviewed-awaiting-user', 'confirmed-with-open-questions', 'confirmed-awaiting-separate-execution'
+])
 
 function countPlugins(root) {
   const file = join(root, '鱼的手', '插件注册表', 'registry.json')
@@ -221,7 +274,7 @@ function riceSummary(root) {
 function stomachSummary(root) {
   const { count, phases } = countTasks(root)
   if (!count) return { key: 'stomach', title: '胃·分析', summary: '尚无分析任务。', state: 'empty', href: '#stomach' }
-  const done = Object.entries(phases).filter(([k]) => /confirm|produced|materials|completed/i.test(k)).reduce((s, [, v]) => s + v, 0)
+  const done = Object.entries(phases).filter(([k]) => PRODUCED_PHASES.has(k)).reduce((s, [, v]) => s + v, 0)
   return {
     key: 'stomach', title: '胃·分析',
     summary: `共 ${count} 个分析任务，其中 ${done} 个已产出方案或材料。`,

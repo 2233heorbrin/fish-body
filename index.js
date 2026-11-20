@@ -552,14 +552,17 @@ export async function apply(ctx, config = {}) {
       return jsonResponse(request, { ok: false, error: '请求体不是有效 JSON。' }, 400)
     }
     const id = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload.id : undefined
-    if (typeof id !== 'string' || !id.trim() || /[\\/]|^https?:/i.test(id.trim())) {
+    // 合法登记 id 本身就是 github.com/owner/repo、npm:<pkg>/<id> 这类含斜杠形态，不能用「含斜杠」当拒绝条件。
+    // 防开放代理靠 rice-model 的已登记 id 精确核对（findRiceSource 全等匹配）：任意外部 URL/本地路径不在登记集合内即拒。
+    if (typeof id !== 'string' || !id.trim() || id.length > 300 || /[\x00-\x1f]/.test(id)) {
       return jsonResponse(request, { ok: false, error: '只接受已登记来源 id。' }, 400)
     }
-    const source = findRiceSource({ frameworkRoot: frameworkRoot(), id: id.trim() })
+    const sourceId = id.trim()
+    const source = findRiceSource({ frameworkRoot: frameworkRoot(), id: sourceId })
     if (!source) {
       return jsonResponse(request, { ok: false, error: '来源 id 未登记；不接受任意链接或路径。' }, 400)
     }
-    return jsonResponse(request, { ok: true, result: checkVersion({ frameworkRoot: frameworkRoot(), id: id.trim(), source }) })
+    return jsonResponse(request, { ok: true, result: checkVersion({ frameworkRoot: frameworkRoot(), id: sourceId, source }) })
   })
 
   /* GET 手页插件开关只读状态：pluginId 候选来自 registry，逐个交给 C 的只读核实；三者分开不伪造。 */
