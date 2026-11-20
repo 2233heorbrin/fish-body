@@ -56,8 +56,9 @@ export function installDataClient(React, ctx, component) {
     const select = () => run(async () => {
       const result = await ctx.remote.directoryPicker.pick()
       if (!result.ok) throw new Error(result.error.message)
-      if (!result.value) return request()
-      return request({ action: 'select', path: result.value })
+      const value = result.value ? await request({ action: 'select', path: result.value }) : await request()
+      commit(value)
+      return value
     }, '选择目录')
     const open = section => run(async () => {
       const response = await fetch(base + '/open', { method: 'POST', credentials: 'same-origin',

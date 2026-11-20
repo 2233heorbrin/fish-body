@@ -66,8 +66,9 @@ function installDataClient(React, ctx, component) {
     const select = () => run(async () => {
       const result = await ctx.remote.directoryPicker.pick()
       if (!result.ok) throw new Error(result.error.message)
-      if (!result.value) return request()
-      return request({ action: 'select', path: result.value })
+      const value = result.value ? await request({ action: 'select', path: result.value }) : await request()
+      commit(value)
+      return value
     }, '选择目录')
     const open = section => run(async () => {
       const response = await fetch(base + '/open', { method: 'POST', credentials: 'same-origin',
@@ -697,7 +698,7 @@ function installDataClient(React, ctx, component) {
         finally { if (liveRef.current) setPendingOpen(false) }
       }
       const groups = {}
-      for (const item of (items || [])) { const key = item.source || '未标注来源'; (groups[key] = groups[key] || []).push(item) }
+      for (const item of (items || [])) { const key = item.pluginId || '未标注插件'; (groups[key] = groups[key] || []).push(item) }
       const runtimeLabel = { unknown: '暂无反馈', running: '正在运行', stopped: '已停止', error: '加载或运行失败' }
       const enabledLabel = (v) => v === true ? '已启用' : v === false ? '已关闭' : '未确认'
       const requestLabel = { on: '已提交启动请求', off: '已提交关闭请求', error: '请求失败' }
@@ -719,9 +720,9 @@ function installDataClient(React, ctx, component) {
         issue ? h('div', null, h('p', { className: 'fb-error', role: 'alert' }, '原生状态读取失败：' + issue), h(Retry, { onRetry: () => setRetryKey(k => k + 1) })) : null,
         !gap && !issue && !items ? h('p', { className: 'fb-note', role: 'status' }, '正在读取原生状态…') : null,
         !gap && !issue && items && !items.length ? h('div', { className: 'fb-note-box' }, '暂无可核实的来源插件状态。') : null,
-        Object.keys(groups).map(source => h('div', { key: source, className: 'fb-plugin-group' },
-          h('h4', null, '按来源插件分组：', source),
-          groups[source].map(item => {
+        Object.keys(groups).map(pluginId => h('div', { key: pluginId, className: 'fb-plugin-group' },
+          h('h4', null, '来源插件：', pluginId),
+          groups[pluginId].map(item => {
             const op = ops[item.pluginId] || {}
             const canSwitch = item.installed === true && !!item.nativeId && gap === null
             const whyNo = !item.installed ? '未安装，不提供启停按钮。' : !item.nativeId ? '身份映射不明，不提供启停按钮。' : null
@@ -797,6 +798,9 @@ function installDataClient(React, ctx, component) {
       const mountedRef = useRef(true)
       const activeRef = useRef(null)
       const tabRefs = useRef([])
+      /* 记录已同步到 sections 的数据根目录：undefined=尚未建立基线。
+         初次只读 GET 只建立基线、不重建整页；只有真正切根才递增 retryKey。 */
+      const knownRootRef = useRef(undefined)
 
       useEffect(() => () => { mountedRef.current = false }, [])
       useEffect(() => {
@@ -945,7 +949,14 @@ function installDataClient(React, ctx, component) {
           h(Intro, { title: '胃 · 分析与拆分', desc: '查看分析过程、已保存的功能选择与产出。', note: '刷新任务状态只读取当前状态，不会自动重扫、生成包或安装。' }),
           h(StomachTasks), folderBar)
         else if (id === 'hand') body = h(HandPanel, { onOpenFolder: openFolder, sectionPath: current.path })
-        else if (id === 'settings') body = h(SettingsPanel, { onState: () => setRetryKey(key => key + 1), lifecycle })
+        else if (id === 'settings') body = h(SettingsPanel, {
+          onState: dataState => {
+            const nextRoot = dataState && dataState.root ? dataState.root : null
+            if (knownRootRef.current === undefined) { knownRootRef.current = nextRoot; return }
+            if (knownRootRef.current !== nextRoot) { knownRootRef.current = nextRoot; setRetryKey(key => key + 1) }
+          },
+          lifecycle
+        })
         else body = h('div', { className: 'fb-note-box' }, '未知分区：' + id)
       }
 
