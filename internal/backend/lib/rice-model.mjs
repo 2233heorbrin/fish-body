@@ -4,7 +4,7 @@
  * 版本检查在 version-check.mjs，由调用方显式发起；本模块只提供已登记来源 id 与必要元数据。
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, resolve, relative, basename } from 'node:path'
+import { join, resolve, relative, basename, dirname } from 'node:path'
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'))
 const isDir = (p) => { try { return statSync(p).isDirectory() } catch { return false } }
@@ -28,9 +28,13 @@ function displayName(source, doc, dir) {
   return basename(dir ?? '') || '未命名材料'
 }
 
-/** 来源类型：github / npm / local / unknown；只看已落盘字段，不发任何网络请求。 */
+/** 来源类型：github / npm / local / unknown；只看已落盘字段，不发任何网络请求。
+ * 明确的本地类型/平台字段（local-copy / local-first-party / sourcePlatform=local）优先，
+ * 不能被索引分区的 hint='github' 覆盖成远端来源——否则本地材料会被误标 github 并出现假的检查入口。 */
 function classifyType(source, doc, hint) {
   const kind = text(source?.sourceKind ?? doc?.sourceKind ?? source?.sourceType ?? doc?.sourceType)
+  const platform = text(source?.sourcePlatform ?? doc?.sourcePlatform)
+  if (/^local/i.test(kind || '') || /^local$/i.test(platform || '')) return 'local'
   if (kind === 'npm' || kind === 'git' || kind === 'github') {
     if (kind === 'npm') return 'npm'
     return 'github'
@@ -38,10 +42,62 @@ function classifyType(source, doc, hint) {
   const url = text(source?.upstreamUrl ?? source?.upstream ?? doc?.upstreamUrl)
   if (url && /github\.com/i.test(url)) return 'github'
   if (url && (/npmjs/i.test(url) || /^npm:/i.test(url))) return 'npm'
+  // hint 只作兜底，且不得把显式本地平台/类型或本地路径材料标成 github。
+  if (text(source?.localRepositoryPath) || text(source?.localPath)) return 'local'
   if (hint === 'npm') return 'npm'
   if (hint === 'github') return 'github'
-  if (text(source?.localRepositoryPath) || text(source?.localPath)) return 'local'
   return 'unknown'
+}
+
+/**
+ * 按索引项对应的真实落盘布局读取来源元数据。兼容三种布局：
+ *  ① 旧迁移：仓库子目录内无 来源.json，真实来源在父层 <项目>/来源.json；
+ *  ② 当前采集：<项目>/versions/<commit>/来源.json；
+ *  ③ 仓库子目录自身 <仓库>/来源.json。
+ * 只接受"localRepositoryPath 精确指向本索引 repositoryPath"的父层/版本来源，
+ * 避免把邻居或同名来源误配到本项；核对 id/owner/repository 是否被来源覆盖缺失的元数据。
+ */
+function projectSource(root, p, dir) {
+  const repo = text(p?.repositoryPath)
+  if (!dir || !repo) return {}
+  const dirAbs = resolve(dir)
+  const pick = (candidate) => {
+    if (!candidate || typeof candidate !== 'object') return null
+    const lrp = text(candidate.localRepositoryPath ?? candidate.localPath)
+    if (lrp && resolve(root, lrp) !== dirAbs) return null      // 关联不匹配：拒绝邻居来源（相对路径基于 root）
+    const owner = text(candidate.owner), repository = text(candidate.repository ?? candidate.repo)
+    const id = text(p.id)
+    // 有 owner/repo 时，若与索引 id 的 owner/repo 都明确且不一致，也拒绝同名误配
+    if (owner && repository && /^github\.com\//i.test(id || '')) {
+      const m = /^github\.com\/([^/]+)\/([^/]+)/i.exec(id)
+      if (m && m[1].toLowerCase() !== owner.toLowerCase()) return null
+      if (m && m[2].toLowerCase() !== repository.toLowerCase()) return null
+    }
+    return candidate
+  }
+  const read = (fp) => existsSync(fp) ? pick(safeJson(fp)) : null
+  const candidates = []
+  // ③ 仓库子目录自身
+  candidates.push(join(dir, '来源.json'))
+  // ① 父层（旧迁移形态）
+  candidates.push(join(dirname(dir), '来源.json'))
+  // ② versions/<commit>/来源.json（当前采集器形态）
+  const versionsDir = join(dirname(dir), 'versions')
+  if (isDir(versionsDir)) {
+    let commits = []
+    try { commits = readdirSync(versionsDir) } catch { commits = [] }
+    const pinned = text(p.pinnedCommit)
+    const ordered = pinned ? [pinned, ...commits.filter((c) => c !== pinned)] : commits
+    for (const c of ordered) {
+      if (!c || c.includes('/') || c.includes('\\')) continue
+      candidates.push(join(versionsDir, c, '来源.json'))
+    }
+  }
+  for (const fp of candidates) {
+    const source = read(fp)
+    if (source) return source
+  }
+  return {}
 }
 
 /** 本地版本：优先 list 里的 manifest 版本，其次固定提交短号。 */
@@ -173,8 +229,9 @@ export function listRiceSources({ frameworkRoot } = {}) {
       const id = text(p.id) || (p.repositoryPath ? `local:${p.repositoryPath}` : null)
       if (!id || byId.has(id)) continue
       const dir = p.repositoryPath ? resolve(root, p.repositoryPath) : null
-      const sourcePath = dir ? join(dir, '来源.json') : null
-      const source = sourcePath && existsSync(sourcePath) ? safeJson(sourcePath) : {}
+      // 按真实布局读来源：仓库内 / 父层 / versions/<commit>；核实 localRepositoryPath 关联本仓库，
+      // 防邻居误配。本地材料（local-copy/local-first-party）由 classifyType 尊重其类型，不被 hint 误标。
+      const source = projectSource(root, p, dir)
       byId.set(id, normalizeItem({ id, source, doc: p, dir, hint: 'github', root }))
     }
   }

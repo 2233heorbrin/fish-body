@@ -1,5 +1,9 @@
 # fish-body（鱼的身体）
 
+## 饭·来源读取修正（0.0.7-dev.8，分支测试版）
+
+> dev.8 修正饭·来源页「仓库插件显示无远端来源、插件市场却显示」：`rice-model.mjs` 按真实落盘布局（仓库内 / 父层 `来源.json` / `versions/<commit>/来源.json`）读取来源元数据，核实 `localRepositoryPath` 指向本仓库后才采用，名称 / `hasRemote` / 版本检查共用同一份元数据；本地材料不再被 `hint` 误标为 github。真正无来源仍 `unavailable`、不可比版本仍 `unknown`，不谎报最新。真实饭目录 GitHub 材料 `hasRemote` 由 1 提升至 17。五页 UI 与启停/状态透传沿用 dev.7。
+
 ## 鱼身体 UI 五页（0.0.7-dev.7，分支测试版）
 
 > dev.7 在 dev.6 基础上修正设置页「目录失效」误报：宿主依赖错误（`dependencies.error`，如 `FISH_NATIVE_INSTALL_INTERCEPT_UNAVAILABLE`）不再混入目录问题判定；宿主依赖状态仍沿「程序准备」独立显示。五页 UI 与状态透传沿用 dev.6。
