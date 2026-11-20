@@ -104,7 +104,7 @@ test('真正无来源材料：保持不可查询，不伪造远端', () => {
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('父层无关来源（localRepositoryPath 指向别的仓库）不得误配到本索引项', () => {
+test('父层来源 localRepositoryPath 指向别的仓库时不得误配到本索引项', () => {
   const root = fixture((r) => {
     const targetRel = '饭/github.com/acme/target/仓库'
     const neighborRel = '饭/github.com/acme/neighbor/仓库'
@@ -112,15 +112,75 @@ test('父层无关来源（localRepositoryPath 指向别的仓库）不得误配
       { id: 'github.com/acme/target', sourceType: 'git', repositoryPath: targetRel, pinnedCommit: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' }
     ]))
     wj(join(r, targetRel, 'PLACEHOLDER'), {})
-    // 父层放一份"邻居"来源：owner/repo 与索引 id 无关，且 localRepositoryPath 指向别的仓库
-    wj(join(r, '饭', 'github.com', 'acme', 'WRONG_PARENT', '来源.json'),
+    // 关键：来源就放在 target 的实际候选父层（dirname(dir)），而不是 WRONG_PARENT——
+    // 否则空格子路径根本不会被读到，测试成了空测。此来源的 localRepositoryPath 指向 neighbor，须被拒。
+    wj(join(r, '饭', 'github.com', 'acme', 'target', '来源.json'),
       ghSource('acme', 'neighbor', neighborRel, 'ffffffffffffffffffffffffffffffffffffffff'))
   })
   try {
     const row = findRiceSource({ frameworkRoot: root, id: 'github.com/acme/target' })
     assert.ok(row)
-    assert.equal(row.hasRemote, false, '不得把无关父层来源误配到 target')
+    assert.equal(row.hasRemote, false, '父层来源指向别的仓库时不得误配到 target')
     assert.equal(row._meta.owner ?? null, null)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('父层来源缺 localRepositoryPath 或 JSON 无效时不得命中（空对象拒绝）', () => {
+  const root = fixture((r) => {
+    const repoRel = '饭/github.com/acme/nolrp/仓库'
+    wj(join(r, '饭', '项目索引.json'), idx([
+      { id: 'github.com/acme/nolrp', sourceType: 'git', repositoryPath: repoRel, pinnedCommit: '1111111111111111111111111111111111111111' }
+    ]))
+    wj(join(r, repoRel, 'PLACEHOLDER'), {})
+    // 父层来源有完整 owner/repo/upstream，但缺 localRepositoryPath —— 无法确认关联，须拒绝
+    wj(join(r, '饭', 'github.com', 'acme', 'nolrp', '来源.json'),
+      { sourceType: 'git', sourcePlatform: 'github.com', owner: 'acme', repository: 'nolrp',
+        upstreamUrl: 'https://github.com/acme/nolrp.git', sourceStatus: 'pinned-preserved' })
+  })
+  try {
+    const row = findRiceSource({ frameworkRoot: root, id: 'github.com/acme/nolrp' })
+    assert.ok(row)
+    assert.equal(row.hasRemote, false, '缺关联字段的父层来源不得命中')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('versions 只认索引固定提交，不扫其他提交冒充当前来源', () => {
+  const root = fixture((r) => {
+    const repoRel = '饭/github.com/acme/pinonly/仓库'
+    const pinned = '2222222222222222222222222222222222222222'
+    wj(join(r, '饭', '项目索引.json'), idx([
+      { id: 'github.com/acme/pinonly', sourceType: 'git', repositoryPath: repoRel, pinnedCommit: pinned }
+    ]))
+    wj(join(r, repoRel, 'PLACEHOLDER'), {})
+    // 一个"其他提交"目录带完整来源，但 pinned 目录无来源 → 不得用其他提交冒充
+    wj(join(r, '饭', 'github.com', 'acme', 'pinonly', 'versions', '3333333333333333333333333333333333333333', '来源.json'),
+      ghSource('acme', 'pinonly', repoRel, '3333333333333333333333333333333333333333'))
+  })
+  try {
+    const row = findRiceSource({ frameworkRoot: root, id: 'github.com/acme/pinonly' })
+    assert.ok(row)
+    assert.equal(row.hasRemote, false, '不得扫描非 pinned 提交来源')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('monorepo 子包 id（repo#subdir）不得被正则吞成 repo 整体而误配', () => {
+  const root = fixture((r) => {
+    const repoRel = '饭/github.com/acme/mono/subpackages/plugins%2Fa/仓库'
+    wj(join(r, '饭', '项目索引.json'), idx([
+      { id: 'github.com/acme/mono#plugins/a', sourceType: 'git', subdir: 'plugins/a', repositoryPath: repoRel, pinnedCommit: '4444444444444444444444444444444444444444' }
+    ]))
+    wj(join(r, repoRel, 'PLACEHOLDER'), {})
+    // 来源在子包材料的父层 mono/subpackages/plugins%2Fa/（= dirname(dir)）。
+    // 来源 repository 是 'mono'（非 'mono#plugins/a'），旧正则会把 repo 读成 'mono#plugins/a' 而误拒。
+    wj(join(r, '饭', 'github.com', 'acme', 'mono', 'subpackages', 'plugins%2Fa', '来源.json'),
+      { ...ghSource('acme', 'mono', repoRel, '4444444444444444444444444444444444444444'),
+        subdir: 'plugins/a', sourceMaterialName: 'mono/subpackages/plugins%2Fa' })
+  })
+  try {
+    const row = findRiceSource({ frameworkRoot: root, id: 'github.com/acme/mono#plugins/a' })
+    assert.ok(row)
+    assert.equal(row.hasRemote, true, 'monorepo 子包须正确识别远端来源')
+    assert.equal(row._meta.repo, 'mono')
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -148,17 +208,6 @@ test('本地材料（local-copy/local-first-party）尊重本地类型，不被 
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
-test('真实饭目录：12 条父层匹配来源至少 1 条 hasRemote 由 false 转 true，本地三条保持不可查询', () => {
-  const root = 'D:\\deepseek框架'
-  const rows = listRiceSources({ frameworkRoot: root })
-  const fish = rows.find((x) => x.id === 'github.com/ssamurias/dsh-fish')
-  assert.ok(fish, 'dsh-fish 索引项应在列表')
-  assert.equal(fish.hasRemote, true, 'dsh-fish 父层有完整来源，须 hasRemote=true')
-  assert.match(fish._meta.upstreamUrl, /github\.com\/ssamurias\/dsh-fish/)
-  const withRemote = rows.filter((x) => x.sourceType === 'github' && x.hasRemote).length
-  assert.ok(withRemote >= 4, `父层匹配来源须成批识别，实际 github+hasRemote=${withRemote}`)
-  for (const id of ['local/dsh干活规范配件', 'local/utility.sha256']) {
-    const row = rows.find((x) => x.id === id)
-    if (row) { assert.equal(row.sourceType, 'local'); assert.equal(row.hasRemote, false) }
-  }
-})
+/* 注：读真实饭目录（D:\deepseek框架）的实机核对不放进开源测试，避免硬编码本机路径。
+ * 该核对（dsh-fish/cyanwell/fish-body hasRemote=true、本地项 hasRemote=false、成批识别数）
+ * 由结果目录独立探针 probe-source-layout*.mjs 覆盖，随交付证据留存。 */

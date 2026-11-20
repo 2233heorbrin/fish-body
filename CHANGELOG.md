@@ -1,5 +1,11 @@
 # 更新记录
 
+## 0.0.7-dev.9 — 2026-11-21（来源读取补修复核收口测试版）
+
+- 复核收口 dev.8 的来源读取补修（Codex #230 四点）：①`classifyType` 不再用 `/^local/` 前缀误伤带真实 GitHub upstream 的 `local-git-fixture`（如 dsh-context），只认明确的 `local-copy` / `local-first-party` / `sourcePlatform=local`；dsh-context 归回 GitHub、正确显示远端来源与版本检查入口。②`projectSource` 强化关联确认——空对象拒绝、必须有指向本仓库的 `localRepositoryPath` 才命中、`versions` 只读索引固定提交不扫其他提交冒充。③来源 id 解析分离 `#subdir`，不再把 monorepo 子包名吞进 repo；新增 `sourceMaterialName` 子包匹配，防串兄弟子包。④测试移正：无关父层测试放到实际候选父层（非空测）、新增缺关联 / 固定提交 / monorepo 子包三例、本机实机核对移到结果目录探针不纳入开源测试。
+- 主人反馈的「GitHub 来源显示无法检查、npm 来源能查版本」经实测为环境网络差异 + 本会话临时状态：`api.github.com` 在无代理时限流（403），npm registry 可达；当前网络下 GitHub 与 npm 两条来源都能正确查到远端版本并判「有新版本」，`check-version` 逻辑正确、不谎报最新。归类 bug 修复后 GitHub 来源不再被误标「本地材料」。
+- 验证：`test/fish-body-rice-source.test.mjs` 9/9、必要回归（review-fix + ui-contract + ui-plugin-switch）45/45、`node --check` 0；真实读模型 36 项中 github19 / hasRemote19 / local6，dsh-fish / cyanwell / fish-body / dsh-context 均有远端来源、本地项保持本地。仅本地测试分支与实际包验证，未合并 / tag / Release / registry。
+
 ## 0.0.7-dev.8 — 2026-11-20（饭·来源读取缺陷补修测试版）
 
 - 修正饭·来源页「仓库插件显示无远端来源、插件市场却显示」：`rice-model.mjs` 原索引分支只读 `repositoryPath` 仓库子目录内的 `来源.json`，而真实来源元数据在父层 `饭/github.com/<owner>/<repo>/来源.json` 或当前采集的 `versions/<commit>/来源.json`，导致 GitHub 材料 `hasRemote=false`、误判「无远端来源」。

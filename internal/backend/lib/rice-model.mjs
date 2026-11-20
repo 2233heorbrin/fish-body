@@ -34,10 +34,15 @@ function displayName(source, doc, dir) {
 function classifyType(source, doc, hint) {
   const kind = text(source?.sourceKind ?? doc?.sourceKind ?? source?.sourceType ?? doc?.sourceType)
   const platform = text(source?.sourcePlatform ?? doc?.sourcePlatform)
-  if (/^local/i.test(kind || '') || /^local$/i.test(platform || '')) return 'local'
-  if (kind === 'npm' || kind === 'git' || kind === 'github') {
+  // 只认明确的本地语义。注意 sourceKind='local-git-fixture' 这类值虽以 local 开头，
+  // 却是带真实 GitHub upstream 的 git 材料（如 dsh-context），不能用 /^local/ 前缀误伤。
+  const explicitLocal =
+    /^(local-copy|local-first-party|local)$/i.test(kind || '') ||
+    /^local$/i.test(platform || '')
+  if (explicitLocal) return 'local'
+  if (kind === 'npm' || kind === 'git' || kind === 'github' || kind === 'local-git-fixture') {
     if (kind === 'npm') return 'npm'
-    return 'github'
+    return /^local$/i.test(platform || '') ? 'local' : 'github'
   }
   const url = text(source?.upstreamUrl ?? source?.upstream ?? doc?.upstreamUrl)
   if (url && /github\.com/i.test(url)) return 'github'
@@ -61,37 +66,55 @@ function projectSource(root, p, dir) {
   const repo = text(p?.repositoryPath)
   if (!dir || !repo) return {}
   const dirAbs = resolve(dir)
-  const pick = (candidate) => {
-    if (!candidate || typeof candidate !== 'object') return null
-    const lrp = text(candidate.localRepositoryPath ?? candidate.localPath)
-    if (lrp && resolve(root, lrp) !== dirAbs) return null      // 关联不匹配：拒绝邻居来源（相对路径基于 root）
-    const owner = text(candidate.owner), repository = text(candidate.repository ?? candidate.repo)
-    const id = text(p.id)
-    // 有 owner/repo 时，若与索引 id 的 owner/repo 都明确且不一致，也拒绝同名误配
-    if (owner && repository && /^github\.com\//i.test(id || '')) {
-      const m = /^github\.com\/([^/]+)\/([^/]+)/i.exec(id)
-      if (m && m[1].toLowerCase() !== owner.toLowerCase()) return null
-      if (m && m[2].toLowerCase() !== repository.toLowerCase()) return null
+  const id = text(p.id) || ''
+  const idxSubdir = text(p.subdir)
+  // 解析索引 id：github.com/<owner>/<repo>[/<subpackages/...>][#<subdir>]。
+  // 不能用 ([^/]+) 吞掉 #subdir——那会把 monorepo 子包名吃进 repo，破坏兄弟子包区分。
+  let idxOwner = null, idxRepo = null
+  const gh = /^github\.com\/([^/#]+)\/([^/#]+)/i.exec(id)
+  if (gh) { idxOwner = gh[1]; idxRepo = gh[2] }
+  // 来源里的物理材料名（sourceMaterialName = repo/subpackages/<encoded-subdir>），
+  // 用来核对 monorepo 子包，避免把兄弟子包来源配到本索引项。
+  const materialMatches = (candidate) => {
+    if (!idxSubdir && !/#/.test(id)) return true            // 非子包索引：无需核对子包
+    const mName = text(candidate.sourceMaterialName)
+    const sub = text(candidate.subdir)
+    if (mName) {
+      // 若材料名是 repo/subpackages/<enc>，其编码子目录须能对应索引 subdir。
+      const enc = idxSubdir ? encodeURIComponent(idxSubdir.replace(/^\/+|\/+$/g, '')) : null
+      if (enc && mName.includes('/subpackages/')) return mName.endsWith('/subpackages/' + enc)
+      if (sub && idxSubdir && sub.replace(/^\/+|\/+$/g, '') !== idxSubdir.replace(/^\/+|\/+$/g, '')) return false
+      return true
     }
+    if (sub && idxSubdir && sub.replace(/^\/+|\/+$/g, '') !== idxSubdir.replace(/^\/+|\/+$/g, '')) return false
+    return true
+  }
+  const pick = (candidate) => {
+    if (!candidate || typeof candidate !== 'object' || !Object.keys(candidate).length) return null
+    const lrp = text(candidate.localRepositoryPath ?? candidate.localPath)
+    // 关联确认：必须有能指向本仓库的 localRepositoryPath（相对基于 root / 绝对归一）。
+    // 缺 lrp 的父层/版本来源一律不认；safeJson 失败得到 {} 也会被上面 empty 检查拒绝。
+    if (!lrp || resolve(root, lrp) !== dirAbs) return null
+    const owner = text(candidate.owner), repository = text(candidate.repository ?? candidate.repo)
+    if (owner && idxOwner && owner.toLowerCase() !== idxOwner.toLowerCase()) return null
+    if (repository && idxRepo && repository.toLowerCase() !== idxRepo.toLowerCase()) return null
+    if (!materialMatches(candidate)) return null
     return candidate
   }
-  const read = (fp) => existsSync(fp) ? pick(safeJson(fp)) : null
+  const read = (fp) => {
+    if (!existsSync(fp)) return null
+    let obj; try { obj = safeJson(fp) } catch { return null }
+    return pick(obj)
+  }
   const candidates = []
   // ③ 仓库子目录自身
   candidates.push(join(dir, '来源.json'))
   // ① 父层（旧迁移形态）
   candidates.push(join(dirname(dir), '来源.json'))
-  // ② versions/<commit>/来源.json（当前采集器形态）
-  const versionsDir = join(dirname(dir), 'versions')
-  if (isDir(versionsDir)) {
-    let commits = []
-    try { commits = readdirSync(versionsDir) } catch { commits = [] }
-    const pinned = text(p.pinnedCommit)
-    const ordered = pinned ? [pinned, ...commits.filter((c) => c !== pinned)] : commits
-    for (const c of ordered) {
-      if (!c || c.includes('/') || c.includes('\\')) continue
-      candidates.push(join(versionsDir, c, '来源.json'))
-    }
+  // ② versions/<pinnedCommit>/来源.json —— 只认索引固定提交，绝不扫描其他提交冒充当前来源。
+  const pinned = text(p.pinnedCommit)
+  if (pinned && !pinned.includes('/') && !pinned.includes('\\')) {
+    candidates.push(join(dirname(dir), 'versions', pinned, '来源.json'))
   }
   for (const fp of candidates) {
     const source = read(fp)

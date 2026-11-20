@@ -1,5 +1,9 @@
 # fish-body（鱼的身体）
 
+## 来源读取复核收口（0.0.7-dev.9，分支测试版）
+
+> dev.9 收口 dev.8 来源读取补修的复核意见：`classifyType` 不再把 `local-git-fixture`（带真实 GitHub upstream）误判为本地材料；`projectSource` 强化关联确认（空对象/缺 `localRepositoryPath` 拒绝、`versions` 只读固定提交）；来源 id 分离 `#subdir`、按 `sourceMaterialName` 核对 monorepo 子包防串包。真实饭目录 GitHub 材料 `hasRemote` 19 项、本地材料 6 项，dsh-context 归回 GitHub。五页 UI 与启停/状态透传沿用 dev.7。用户反馈的「GitHub 无法检查 / npm 能查版本」经实测为无代理时 `api.github.com` 限流的网络差异 + 本会话临时状态，非版本检查缺陷。
+
 ## 饭·来源读取修正（0.0.7-dev.8，分支测试版）
 
 > dev.8 修正饭·来源页「仓库插件显示无远端来源、插件市场却显示」：`rice-model.mjs` 按真实落盘布局（仓库内 / 父层 `来源.json` / `versions/<commit>/来源.json`）读取来源元数据，核实 `localRepositoryPath` 指向本仓库后才采用，名称 / `hasRemote` / 版本检查共用同一份元数据；本地材料不再被 `hint` 误标为 github。真正无来源仍 `unavailable`、不可比版本仍 `unknown`，不谎报最新。真实饭目录 GitHub 材料 `hasRemote` 由 1 提升至 17。五页 UI 与启停/状态透传沿用 dev.7。
