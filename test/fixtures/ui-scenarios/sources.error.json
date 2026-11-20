@@ -1,0 +1,10 @@
+{
+  "endpoint": "GET /api/fish-body/sources",
+  "state": "error",
+  "note": "示例数据：来源列表读取失败，ok:false，前端显示失败说明。",
+  "response": {
+    "ok": false,
+    "error": { "code": "sources-read-failed", "message": "读取来源清单失败：示例错误" },
+    "items": []
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "endpoint": "GET /api/fish-body/plugin-switch/state",
+  "state": "normal",
+  "note": "示例数据：已安装来源插件，原生启用选择明确、运行反馈 running，registered 仅登记。三者分开。",
+  "response": {
+    "ok": true,
+    "items": [
+      {
+        "pluginId": "demo-rice-plugin",
+        "nativeId": "demo-rice-plugin@1.0.0",
+        "installed": true,
+        "enabled": true,
+        "runtime": "running",
+        "registered": true,
+        "source": "demo-rice-plugin",
+        "message": "已按宿主已安装接口读取；示例运行反馈 running。"
+      },
+      {
+        "pluginId": "demo-hand-plugin",
+        "nativeId": "demo-hand-plugin@2.1.0",
+        "installed": true,
+        "enabled": false,
+        "runtime": "stopped",
+        "registered": true,
+        "source": "demo-hand-plugin",
+        "message": "原生启用选择为 false，示例运行反馈 stopped。"
+      }
+    ]
+  },
+  "postResult": {
+    "endpoint": "POST /api/fish-body/plugin-switch",
+    "ok": true,
+    "result": { "pluginId": "demo-hand-plugin", "requested": true, "state": "on", "message": "已提交启动开关请求，实际加载状态需刷新只读状态入口确认；本结果仅表示请求已提交，不代表运行正常。" }
+  }
+}

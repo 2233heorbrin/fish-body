@@ -1,0 +1,19 @@
+{
+  "endpoint": "POST /api/fish-body/check-version",
+  "state": "unavailable",
+  "note": "示例数据：无远端来源或来源不明，comparison 必须为 unknown；契约五态之一。文件名 state 段为契约态，供 ui-contract 测试覆盖。",
+  "response": {
+    "ok": true,
+    "result": {
+      "id": "src-rice-c",
+      "localVersion": null,
+      "remoteVersion": null,
+      "source": "local",
+      "checkedAt": "2026-11-20T10:02:00Z",
+      "lastSuccessAt": null,
+      "state": "unavailable",
+      "comparison": "unknown",
+      "reason": "该来源无远端可核实地址"
+    }
+  }
+}

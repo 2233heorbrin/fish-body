@@ -1,0 +1,13 @@
+{
+  "endpoint": "GET /api/fish-body/sources",
+  "state": "normal",
+  "note": "示例数据：来源列表三态中的正常态，中文名优先。",
+  "response": {
+    "ok": true,
+    "items": [
+      { "id": "src-rice-a", "name": "饭来源·甲", "sourceType": "github", "localVersion": "1.2.0", "description": "示例：社区维护的来源仓库", "path": "sources/rice-a", "hasRemote": true },
+      { "id": "src-rice-b", "name": "饭来源·乙", "sourceType": "npm", "localVersion": "2.0.1", "description": "示例：npm 包来源", "path": "sources/rice-b", "hasRemote": true },
+      { "id": "src-rice-c", "name": "本地来源·丙", "sourceType": "local", "localVersion": null, "description": "示例：仅本地材料，无远端", "path": "sources/rice-c", "hasRemote": false }
+    ]
+  }
+}

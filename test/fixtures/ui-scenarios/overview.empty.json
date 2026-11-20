@@ -1,0 +1,13 @@
+{
+  "endpoint": "GET /api/fish-body/overview",
+  "state": "empty",
+  "note": "示例数据：全部为空态。",
+  "response": {
+    "ok": true,
+    "items": [
+      { "key": "rice", "title": "饭·来源", "summary": "暂无来源", "state": "empty", "href": "#rice" },
+      { "key": "stomach", "title": "胃·分析", "summary": "暂无任务", "state": "empty", "href": "#stomach" },
+      { "key": "hand", "title": "手·组件", "summary": "暂无来源插件", "state": "empty", "href": "#hand" }
+    ]
+  }
+}

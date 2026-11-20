@@ -1,0 +1,19 @@
+{
+  "endpoint": "POST /api/fish-body/check-version",
+  "state": "incomparable",
+  "note": "示例数据：无可靠版本顺序，comparison 必须为 unknown，前端不乱比字符串。",
+  "response": {
+    "ok": true,
+    "result": {
+      "id": "src-rice-b",
+      "localVersion": "2.0.1",
+      "remoteVersion": "build-20261119",
+      "source": "npm dist-tag（示例）",
+      "checkedAt": "2026-11-20T10:01:00Z",
+      "lastSuccessAt": "2026-11-19T09:00:00Z",
+      "state": "incomparable",
+      "comparison": "unknown",
+      "reason": "远端为固定构建号，无可靠版本顺序，不比较"
+    }
+  }
+}

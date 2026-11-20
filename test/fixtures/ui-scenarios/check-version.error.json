@@ -1,0 +1,19 @@
+{
+  "endpoint": "POST /api/fish-body/check-version",
+  "state": "error",
+  "note": "示例数据：本次检查失败，comparison 必须 unknown，不得显示已最新或有新版作为当前结论。",
+  "response": {
+    "ok": true,
+    "result": {
+      "id": "src-rice-a",
+      "localVersion": "1.2.0",
+      "remoteVersion": null,
+      "source": "github releases API（示例·失败）",
+      "checkedAt": "2026-11-20T10:06:00Z",
+      "lastSuccessAt": "2026-11-18T08:00:00Z",
+      "state": "error",
+      "comparison": "unknown",
+      "reason": "本次远端检查失败：示例网络错误"
+    }
+  }
+}

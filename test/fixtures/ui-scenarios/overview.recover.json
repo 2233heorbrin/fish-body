@@ -1,0 +1,13 @@
+{
+  "endpoint": "GET /api/fish-body/overview",
+  "state": "recover",
+  "note": "示例数据：从错误恢复，三项恢复为 ok。",
+  "response": {
+    "ok": true,
+    "items": [
+      { "key": "rice", "title": "饭·来源", "summary": "3 个来源，2 个本地就绪（已恢复）", "state": "ok", "href": "#rice" },
+      { "key": "stomach", "title": "胃·分析", "summary": "任务恢复读取成功", "state": "ok", "href": "#stomach" },
+      { "key": "hand", "title": "手·组件", "summary": "2 个来源插件已登记（已恢复）", "state": "ok", "href": "#hand" }
+    ]
+  }
+}

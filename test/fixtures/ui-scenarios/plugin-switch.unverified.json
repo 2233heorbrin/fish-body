@@ -1,0 +1,25 @@
+{
+  "endpoint": "GET /api/fish-body/plugin-switch/state",
+  "state": "unverified",
+  "note": "示例数据：登记≠运行未验证——已登记/已安装但原生启用选择不明(null)、运行反馈无证据(unknown)。不给假成功。",
+  "response": {
+    "ok": true,
+    "items": [
+      {
+        "pluginId": "demo-unverified-plugin",
+        "nativeId": "demo-unverified-plugin@0.9.0",
+        "installed": true,
+        "enabled": null,
+        "runtime": "unknown",
+        "registered": true,
+        "source": "demo-unverified-plugin",
+        "message": "原生启用选择不明，无真实运行反馈；registered 仅为 fish_hand 登记，不等于已安装、已挂载或运行正常。"
+      }
+    ]
+  },
+  "postResult": {
+    "endpoint": "POST /api/fish-body/plugin-switch",
+    "ok": true,
+    "result": { "pluginId": "demo-unverified-plugin", "requested": false, "state": "off", "message": "已提交关闭开关请求，实际加载状态需刷新只读状态入口确认；本结果仅表示请求已提交，不代表运行正常。" }
+  }
+}

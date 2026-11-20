@@ -1,0 +1,19 @@
+{
+  "endpoint": "POST /api/fish-body/check-version",
+  "state": "historical",
+  "note": "示例数据：本次失败返回上次成功结果，comparison 必须 unknown，标历史结果·当前未确认。",
+  "response": {
+    "ok": true,
+    "result": {
+      "id": "src-rice-a",
+      "localVersion": "1.2.0",
+      "remoteVersion": "1.3.0",
+      "source": "github releases API（示例·历史）",
+      "checkedAt": "2026-11-20T10:05:00Z",
+      "lastSuccessAt": "2026-11-18T08:00:00Z",
+      "state": "historical",
+      "comparison": "unknown",
+      "reason": "本次检查失败，返回上次成功结果；历史结果·当前未确认"
+    }
+  }
+}

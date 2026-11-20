@@ -1,0 +1,11 @@
+{
+  "endpoint": "GET /api/fish-body/sources",
+  "state": "recover",
+  "note": "示例数据：来源列表从失败恢复。",
+  "response": {
+    "ok": true,
+    "items": [
+      { "id": "src-rice-a", "name": "饭来源·甲（已恢复）", "sourceType": "github", "localVersion": "1.2.0", "description": "示例：恢复后重新读取", "path": "sources/rice-a", "hasRemote": true }
+    ]
+  }
+}

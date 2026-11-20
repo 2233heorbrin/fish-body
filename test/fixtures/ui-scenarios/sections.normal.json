@@ -1,0 +1,14 @@
+{
+  "endpoint": "GET /api/fish-body/sections",
+  "state": "normal",
+  "note": "示例数据：五项固定顺序，保留 rice/stomach/hand 原 ID 与目录映射；overview/settings 无目录 path:null，前端不对其发 open。",
+  "response": {
+    "sections": [
+      { "id": "overview", "title": "总览", "description": "鱼身体各区概览（示例）", "path": null },
+      { "id": "rice", "title": "饭·来源", "description": "来源清单与版本检查（示例）", "path": "sources/rice" },
+      { "id": "stomach", "title": "胃·分析", "description": "任务与状态机（示例）", "path": "analysis/stomach" },
+      { "id": "hand", "title": "手·组件", "description": "来源插件与原生启停（示例）", "path": "components/hand" },
+      { "id": "settings", "title": "设置与帮助", "description": "目录绑定与诊断（示例）", "path": null }
+    ]
+  }
+}

@@ -1,0 +1,253 @@
+/* fish-body · 饭侧只读来源读模型
+ * 职责：把 <root>/饭 下已保存的来源材料读成「来源列表」与「总览摘要」。
+ * 硬约束：本模块只做本地文件 stat/read，绝不触发下载 / npm 脚本 / 分析 / 安装 / 版本查询。
+ * 版本检查在 version-check.mjs，由调用方显式发起；本模块只提供已登记来源 id 与必要元数据。
+ */
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { join, resolve, relative, basename } from 'node:path'
+
+const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'))
+const isDir = (p) => { try { return statSync(p).isDirectory() } catch { return false } }
+const text = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+const safeJson = (p) => { try { return readJson(p) } catch { return {} } }
+
+function validRoot(root) {
+  return typeof root === 'string' && root.trim() && isDir(root) ? resolve(root) : null
+}
+
+/** 中文名优先：展示名字段按优先级取值，缺失时回退到可读的仓库/包名。 */
+function displayName(source, doc, dir) {
+  for (const key of ['displayName', 'nameZh', 'display_name', 'name']) {
+    const v = text(source?.[key] ?? doc?.[key]); if (v) return v
+  }
+  const pkg = text(source?.packageName ?? doc?.packageName)
+  if (pkg) return pkg
+  if (text(source?.owner) && text(source?.repository)) return `${source.owner}/${source.repository}`
+  const repo = text(source?.repository ?? doc?.repository)
+  if (repo) return basename(repo)
+  return basename(dir ?? '') || '未命名材料'
+}
+
+/** 来源类型：github / npm / local / unknown；只看已落盘字段，不发任何网络请求。 */
+function classifyType(source, doc, hint) {
+  const kind = text(source?.sourceKind ?? doc?.sourceKind ?? source?.sourceType ?? doc?.sourceType)
+  if (kind === 'npm' || kind === 'git' || kind === 'github') {
+    if (kind === 'npm') return 'npm'
+    return 'github'
+  }
+  const url = text(source?.upstreamUrl ?? source?.upstream ?? doc?.upstreamUrl)
+  if (url && /github\.com/i.test(url)) return 'github'
+  if (url && (/npmjs/i.test(url) || /^npm:/i.test(url))) return 'npm'
+  if (hint === 'npm') return 'npm'
+  if (hint === 'github') return 'github'
+  if (text(source?.localRepositoryPath) || text(source?.localPath)) return 'local'
+  return 'unknown'
+}
+
+/** 本地版本：优先 list 里的 manifest 版本，其次固定提交短号。 */
+function localVersion(source, doc) {
+  const v = text(source?.versionFromManifest ?? source?.version ?? doc?.versionFromManifest)
+  if (v) return v
+  const commit = text(source?.pinnedCommit ?? doc?.pinnedCommit ?? source?.published?.integrity)
+  if (commit && commit.length >= 7) return commit.slice(0, 7)
+  return null
+}
+
+function remoteMetadata(source, doc) {
+  const url = text(source?.upstreamUrl ?? source?.upstream ?? doc?.upstreamUrl)
+  const owner = text(source?.owner ?? doc?.owner)
+  const repo = text(source?.repository ?? source?.repo ?? doc?.repository)
+  const subdir = text(source?.subdir ?? doc?.subdir)
+  const packageName = text(source?.packageName ?? doc?.packageName)
+  const pinnedCommit = text(source?.pinnedCommit ?? doc?.pinnedCommit)
+  const versionFromManifest = text(source?.versionFromManifest ?? doc?.versionFromManifest)
+  const published = source?.published && typeof source.published === 'object' ? source.published : null
+  return { upstreamUrl: url, owner, repo, subdir, packageName, pinnedCommit, versionFromManifest, published }
+}
+
+function normalizeItem({ id, source, doc, dir, hint, root }) {
+  const sourceType = classifyType(source, doc, hint)
+  const meta = remoteMetadata(source, doc)
+  const hasRemote = !!(meta.owner && meta.repo && sourceType === 'github') ||
+    !!(meta.packageName && sourceType === 'npm') ||
+    !!(meta.upstreamUrl && /^https?:\/\//i.test(meta.upstreamUrl) && sourceType !== 'local')
+  const status = text(source?.sourceStatus ?? doc?.sourceStatus)
+  const parts = [
+    sourceType === 'github' ? 'GitHub 来源' : sourceType === 'npm' ? 'npm 来源' : sourceType === 'local' ? '本地材料' : '来源不明',
+    status || '已保存材料'
+  ]
+  return {
+    id,
+    name: displayName(source, doc, dir),
+    sourceType,
+    localVersion: localVersion(source, doc),
+    description: parts.join(' · '),
+    path: dir ? relative(root, dir).replace(/\\/g, '/') : null,
+    hasRemote,
+    // 内部字段：仅 version-check 用；对外 sources 路由会剔除下划线字段。
+    _meta: { ...meta, sourceStatus: status, dir }
+  }
+}
+
+/** 递归找 来源.json，跳过历史版本/依赖目录；depth 限制避免大目录遍历。 */
+function scanSources(base, byId, hint, root, depth) {
+  if (!isDir(base) || depth <= 0) return
+  let names = []
+  try { names = readdirSync(base) } catch { return }
+  for (const name of names) {
+    if (['versions', 'node_modules', '.git', '材料'].includes(name)) continue
+    const child = join(base, name)
+    if (!isDir(child)) continue
+    const docPath = join(child, '来源.json')
+    if (existsSync(docPath)) {
+      const source = safeJson(docPath)
+      const meta = remoteMetadata(source, {})
+      const id = meta.owner && meta.repo
+        ? `github.com/${meta.owner}/${meta.repo}${meta.subdir ? '#' + meta.subdir : ''}`
+        : `local:${relative(root, child).replace(/\\/g, '/')}`
+      if (!byId.has(id)) byId.set(id, normalizeItem({ id, source, doc: {}, dir: child, hint, root }))
+    }
+    scanSources(child, byId, hint, root, depth - 1)
+  }
+}
+
+/** npm 来源从 <饭>/npm/<package>/<id>/材料/来源.json 读取。 */
+function scanNpm(riceRoot, byId, root) {
+  const npmRoot = join(riceRoot, 'npm')
+  if (!isDir(npmRoot)) return
+  let packages = []
+  try { packages = readdirSync(npmRoot) } catch { return }
+  for (const pkg of packages) {
+    const pkgDir = join(npmRoot, pkg)
+    if (!isDir(pkgDir)) continue
+    let ids = []
+    try { ids = readdirSync(pkgDir) } catch { continue }
+    for (const id of ids) {
+      const material = join(pkgDir, id, '材料', '来源.json')
+      if (!existsSync(material)) continue
+      const source = safeJson(material)
+      const key = `npm:${pkg}/${id}`
+      if (byId.has(key)) continue
+      byId.set(key, normalizeItem({ id: key, source, doc: {}, dir: join(pkgDir, id), hint: 'npm', root }))
+    }
+  }
+}
+
+/**
+ * 来源列表（只读）。返回项含内部 _meta 供 version-check 使用；对外路由剔除下划线字段。
+ * 绝不下载 / 执行 npm 脚本 / 分析 / 安装 / 版本查询。
+ */
+export function listRiceSources({ frameworkRoot } = {}) {
+  const root = validRoot(frameworkRoot)
+  if (!root) return []
+  const riceRoot = join(root, '饭')
+  const byId = new Map()
+
+  // ① 项目索引.json 是 github 来源的权威清单
+  const indexPath = join(riceRoot, '项目索引.json')
+  if (existsSync(indexPath)) {
+    const doc = safeJson(indexPath)
+    const projects = Array.isArray(doc?.projects) ? doc.projects : []
+    for (const p of projects) {
+      if (!p || typeof p !== 'object') continue
+      const id = text(p.id) || (p.repositoryPath ? `local:${p.repositoryPath}` : null)
+      if (!id || byId.has(id)) continue
+      const dir = p.repositoryPath ? resolve(root, p.repositoryPath) : null
+      const sourcePath = dir ? join(dir, '来源.json') : null
+      const source = sourcePath && existsSync(sourcePath) ? safeJson(sourcePath) : {}
+      byId.set(id, normalizeItem({ id, source, doc: p, dir, hint: 'github', root }))
+    }
+  }
+  // ② 补齐未进索引的 github/本地来源（upstream 直接写入 <repo>/来源.json）
+  scanSources(riceRoot, byId, 'github', root, 3)
+  // ③ npm 来源
+  scanNpm(riceRoot, byId, root)
+
+  return [...byId.values()].sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh'))
+}
+
+/** 供 check-version 按已登记 id 精确取回一条来源；不接受任意 URL/路径。 */
+export function findRiceSource({ frameworkRoot, id } = {}) {
+  if (typeof id !== 'string' || !id) return null
+  return listRiceSources({ frameworkRoot }).find((row) => row.id === id) ?? null
+}
+
+/** 对外安全的 sources 列表（剔除内部字段）。 */
+export function publicSources(options) {
+  return listRiceSources(options).map(({ _meta, ...item }) => item)
+}
+
+function countTasks(root) {
+  const base = join(root, '鱼的胃', '任务')
+  if (!isDir(base)) return { count: 0, phases: {} }
+  let count = 0
+  const phases = {}
+  for (const name of readdirSync(base)) {
+    const file = join(base, name, 'task.json')
+    if (!existsSync(file)) continue
+    const task = safeJson(file)
+    if (task?.taskId !== name && task?.schema !== 'fish-stomach-task/v1') continue
+    count++
+    const phase = text(task.phase) || 'unknown'
+    phases[phase] = (phases[phase] ?? 0) + 1
+  }
+  return { count, phases }
+}
+
+function countPlugins(root) {
+  const file = join(root, '鱼的手', '插件注册表', 'registry.json')
+  if (!existsSync(file)) return { count: 0 }
+  const doc = safeJson(file)
+  const plugins = Array.isArray(doc?.plugins) ? doc.plugins
+    : doc?.plugins && typeof doc.plugins === 'object' ? Object.values(doc.plugins) : []
+  return { count: plugins.length }
+}
+
+/** overview 单项：rice（饭侧来源读取）。失败只影响本项。 */
+function riceSummary(root) {
+  const items = listRiceSources({ frameworkRoot: root })
+  if (!items.length) return { key: 'rice', title: '饭·来源', summary: '尚未保存任何插件来源材料。', state: 'empty', href: '#rice' }
+  const github = items.filter((x) => x.sourceType === 'github').length
+  const npm = items.filter((x) => x.sourceType === 'npm').length
+  const ready = items.filter((x) => (x._meta?.sourceStatus ? /collected|downloaded/i.test(x._meta.sourceStatus) : true)).length
+  return {
+    key: 'rice', title: '饭·来源',
+    summary: `已保存 ${items.length} 份来源材料（GitHub ${github} · npm ${npm}），其中 ${ready} 份已就绪。`,
+    state: ready === items.length ? 'ok' : ready > 0 ? 'partial' : 'empty',
+    href: '#rice'
+  }
+}
+
+function stomachSummary(root) {
+  const { count, phases } = countTasks(root)
+  if (!count) return { key: 'stomach', title: '胃·分析', summary: '尚无分析任务。', state: 'empty', href: '#stomach' }
+  const done = Object.entries(phases).filter(([k]) => /confirm|produced|materials|completed/i.test(k)).reduce((s, [, v]) => s + v, 0)
+  return {
+    key: 'stomach', title: '胃·分析',
+    summary: `共 ${count} 个分析任务，其中 ${done} 个已产出方案或材料。`,
+    state: done > 0 ? 'ok' : 'partial', href: '#stomach'
+  }
+}
+
+function handSummary(root) {
+  const { count } = countPlugins(root)
+  if (!count) return { key: 'hand', title: '手·组件', summary: '插件注册表为空。', state: 'empty', href: '#hand' }
+  return { key: 'hand', title: '手·组件', summary: `插件注册表已登记 ${count} 个插件。`, state: 'ok', href: '#hand' }
+}
+
+/** 总览摘要：三项各自 try/catch，单项失败只标该项 error+中文 summary，不影响其他。 */
+export function overview({ frameworkRoot } = {}) {
+  const root = validRoot(frameworkRoot)
+  const errorItem = (key, title) => ({ key, title, summary: '该项读取失败（不影响其他分区）。', state: 'error', href: '#' + key })
+  const items = []
+  for (const [key, title, fn] of [
+    ['rice', '饭·来源', riceSummary],
+    ['stomach', '胃·分析', stomachSummary],
+    ['hand', '手·组件', handSummary]
+  ]) {
+    if (!root) { items.push({ key, title, summary: '尚未绑定有效的鱼身体根目录。', state: 'empty', href: '#' + key }); continue }
+    try { items.push(fn(root)) }
+    catch { items.push(errorItem(key, title)) }
+  }
+  return { ok: true, items }
+}

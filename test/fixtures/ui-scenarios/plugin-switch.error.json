@@ -1,0 +1,32 @@
+{
+  "endpoint": "GET /api/fish-body/plugin-switch/state",
+  "state": "error",
+  "note": "示例数据：原生接口缺口——顶层 ok:false，error 带 code/message/evidence，前端显示缺口说明不画假成功。",
+  "response": {
+    "ok": false,
+    "error": {
+      "code": "native-api-unavailable",
+      "message": "未发现可调用的原生插件开关接口（证据见 evidence）。enabled=null 表示原生启用选择不明，runtime=unknown 表示无实际运行反馈；fish_hand 登记只表示已登记，不等于已安装、已挂载或运行正常。",
+      "evidence": [
+        { "location": "internal/backend/lib/body-switch.mjs", "finding": "只控 fish-body 自身，读写 cordis.patch.yml，不是来源插件启停接口。" },
+        { "location": "index.js:15", "finding": "inject 仅 connection/sessionController，未注入 remote/pluginManager。" },
+        { "location": "internal/backend/lib/body-manager-patch.mjs", "finding": "对宿主 manager 源码文本打补丁，setPluginEnabled 是宿主内部调用，非对外接口。" },
+        { "location": "internal/backend-entry.js:44", "finding": "req.resolve 仅用于扩展版本检查，rc.5 无该扩展。" },
+        { "location": "宿主 0.2.1-rc.5 dsh-plugin-manager/lib/index.js", "finding": "PluginManager setPluginEnabled 等为 @Remote 方法，需 ctx.remote.pluginManager 实例，fish-body 侧无句柄。" },
+        { "location": "缺口判定", "finding": "fish-body 未注入 remote，纯 import 仅得类无运行实例，无可调用开关通道。" }
+      ]
+    }
+  },
+  "postResult": {
+    "endpoint": "POST /api/fish-body/plugin-switch",
+    "ok": false,
+    "error": {
+      "code": "native-api-unavailable",
+      "message": "未发现可调用的原生插件开关接口（证据见 evidence），未提交任何开关请求，也未写入 Profile 或第二份配置。",
+      "evidence": [
+        { "location": "index.js:15", "finding": "inject 未注入 remote/pluginManager。" },
+        { "location": "宿主 dsh-plugin-manager/lib/index.js", "finding": "原生开关为 @Remote 方法，需 ctx.remote.pluginManager 实例。" }
+      ]
+    }
+  }
+}

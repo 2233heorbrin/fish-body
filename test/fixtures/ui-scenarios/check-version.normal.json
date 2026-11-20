@@ -1,0 +1,19 @@
+{
+  "endpoint": "POST /api/fish-body/check-version",
+  "state": "normal",
+  "note": "示例数据：查到可比远端版本，comparison 由后端算，前端不做字符串比较。",
+  "response": {
+    "ok": true,
+    "result": {
+      "id": "src-rice-a",
+      "localVersion": "1.2.0",
+      "remoteVersion": "1.3.0",
+      "source": "github releases API（示例）",
+      "checkedAt": "2026-11-20T10:00:00Z",
+      "lastSuccessAt": "2026-11-20T10:00:00Z",
+      "state": "ok",
+      "comparison": "newer",
+      "reason": "远端版本高于本地（示例）"
+    }
+  }
+}

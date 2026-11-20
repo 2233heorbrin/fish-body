@@ -1,0 +1,19 @@
+{
+  "endpoint": "POST /api/fish-body/check-version",
+  "state": "recover",
+  "note": "示例数据：检查从失败恢复为成功，comparison 由后端算为 same。",
+  "response": {
+    "ok": true,
+    "result": {
+      "id": "src-rice-a",
+      "localVersion": "1.2.0",
+      "remoteVersion": "1.2.0",
+      "source": "github releases API（示例·恢复）",
+      "checkedAt": "2026-11-20T10:10:00Z",
+      "lastSuccessAt": "2026-11-20T10:10:00Z",
+      "state": "ok",
+      "comparison": "same",
+      "reason": "恢复后远端版本与本地相同（示例）"
+    }
+  }
+}
