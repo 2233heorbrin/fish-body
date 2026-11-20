@@ -43,9 +43,13 @@ function installDataClient(React, ctx, component) {
   return function FishDataPanel({ onState } = {}) {
     const [value, setValue] = React.useState(null), [error, setError] = React.useState(''), [pending, setPending] = React.useState(false)
     const [expanded, setExpanded] = React.useState(false)
+    const [copyState, setCopyState] = React.useState('')
+    const [history, setHistory] = React.useState([])
     React.useEffect(() => {
       if (component === 'body' && (error || (value && value.status !== 'ready'))) setExpanded(true)
     }, [value?.status, error])
+    const pushHistory = (kind, message) => setHistory(old => [{ at: new Date().toLocaleString('zh-CN', { hour12: false }), kind, message: String(message || '').slice(0, 400) }, ...old].slice(0, 8))
+    React.useEffect(() => { if (error) pushHistory('读取/操作', error) }, [error])
     const commit = result => { setValue(result); onState?.(result) }
     React.useEffect(() => {
       if (component !== 'body') return
@@ -54,9 +58,9 @@ function installDataClient(React, ctx, component) {
       return () => listeners.delete(update)
     }, [])
     React.useEffect(() => { let live = true; request().then(value => { if (live) commit(value) }).catch(error => { if (live) setError(error.message) }); return () => { live = false } }, [])
-    const run = async operation => {
-      setPending(true); setError('')
-      try { commit(await operation()) } catch (error) { setError(error.message) }
+    const run = async (operation, label) => {
+      setPending(true); setError(''); setCopyState('')
+      try { const result = await operation(); if (label) pushHistory(label, '完成'); return result } catch (error) { if (label) pushHistory(label, error.message); setError(error.message) }
       finally { setPending(false) }
     }
     const select = () => run(async () => {
@@ -64,14 +68,35 @@ function installDataClient(React, ctx, component) {
       if (!result.ok) throw new Error(result.error.message)
       if (!result.value) return request()
       return request({ action: 'select', path: result.value })
-    })
+    }, '选择目录')
     const open = section => run(async () => {
       const response = await fetch(base + '/open', { method: 'POST', credentials: 'same-origin',
         headers: { 'content-type': 'application/json' }, body: JSON.stringify({ section }) })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error)
       return request()
-    })
+    }, '打开文件夹')
+    const summaryText = () => {
+      const detail = error || value?.error || value?.dependencies?.error || ''
+      return [
+        '鱼的身体 · 数据诊断摘要',
+        '状态：' + (value?.status || '未读取'),
+        '数据根目录：' + (value?.root || '未绑定'),
+        'Profile：' + (value?.profileDir || '未记录'),
+        '程序准备：' + (value?.dependencies?.status || '未记录'),
+        '最近问题：' + (detail || '无'),
+        '诊断记录：' + (history.length ? history.map(x => x.at + ' ' + x.kind + '：' + x.message).join(' / ') : '无')
+      ].join('\n')
+    }
+    const copy = async () => {
+      setCopyState('')
+      const text = summaryText()
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error('浏览器未开放复制权限')
+        await navigator.clipboard.writeText(text)
+        setCopyState('ok')
+      } catch (_) { setCopyState('fail') }
+    }
     const labels = { ready: '初始化完成', 'pending-workspace': '待选择工作区', 'invalid-root': '原目录失效，请选择新位置',
       'pending-initialization': '待补齐目录', 'invalid-config': '配置无效' }
     if (component === 'body') {
@@ -80,7 +105,18 @@ function installDataClient(React, ctx, component) {
         'host-blocked': '宿主暂不支持完整安装接管', 'restart-required': '新位置已保存，请重新加载身体后使用' }
       const detail = error || value?.error || preparation?.error
       const failed = Boolean(error || value?.error || preparation?.status === 'failed')
-      const retry = () => run(() => request({ action: 'retry' }))
+      const retry = () => run(() => request({ action: 'retry' }), '重试准备').then(result => { if (result) commit(result) })
+      const diag = h('section', { className: 'fb-diag', 'aria-label': '近期诊断' },
+        h('h4', null, '近期诊断'),
+        history.length ? h('ul', { className: 'fb-diag-list' }, history.map((x, i) => h('li', { key: x.at + i },
+          h('span', null, x.at + ' · ' + x.kind, '：', x.message),
+          h('details', null, h('summary', null, '展开详情'), h('pre', null, x.message)))))
+          : h('p', { className: 'fb-note' }, '暂无诊断记录；下方操作的结果会显示在这里。'),
+        h('p', { className: 'fb-note' }, '摘要只含目录、状态与错误文字，不含凭据、人格或记忆内容；复制仅在本地生成文本，不发送、不上传。'),
+        h('div', { className: 'fb-data-actions' },
+          h('button', { type: 'button', className: 'fb-tab', onClick: copy }, '复制诊断摘要'),
+          copyState === 'ok' ? h('span', { className: 'fb-copy-ok', role: 'status' }, '已复制到剪贴板，请自行粘贴。') : null,
+          copyState === 'fail' ? h('span', { className: 'fb-error', role: 'alert' }, '复制失败：浏览器未开放剪贴板权限，请手动选择上方文本复制。') : null))
       return h('section', { 'aria-label': '数据设置', className: 'fb-data' },
         failed ? h('div', { className: 'fb-data-issue' },
           h('p', { className: 'fb-error', role: 'alert' }, error || value?.error ? '数据操作失败，请重试。' : '程序准备失败，请重试。'),
@@ -89,7 +125,7 @@ function installDataClient(React, ctx, component) {
         detail ? h('details', { className: 'fb-data-error' },
           h('summary', null, '查看原始错误'), h('pre', null, detail)) : null,
         h('details', { className: 'fb-data-settings', open: expanded, onToggle: event => setExpanded(event.currentTarget.open) },
-          h('summary', null, '数据设置', h('span', { className: 'fb-data-status', role: 'status' },
+          h('summary', null, '数据设置（技术细节）', h('span', { className: 'fb-data-status', role: 'status' },
             value ? value.status === 'ready' ? '数据目录已绑定' : labels[value.status] || value.status : '正在读取配置…')),
           h('div', { className: 'fb-data-content' },
             value?.root ? h('p', null, '数据根目录：', value.root) : null,
@@ -97,8 +133,9 @@ function installDataClient(React, ctx, component) {
             h('p', { className: 'fb-note' }, '切换位置只更新绑定，不会搬迁旧数据。程序依赖单独准备。'),
             h('div', { className: 'fb-data-actions' },
               h('button', { type: 'button', className: 'fb-tab', disabled: pending, onClick: select }, value?.root ? '切换数据位置' : '选择文件夹'),
-              h('button', { type: 'button', className: 'fb-tab', disabled: pending, onClick: () => run(() => request({ action: 'initialize', sessionId: current() })) }, '使用当前对话工作区'),
-              !failed ? h('button', { type: 'button', className: 'fb-tab', disabled: pending, onClick: retry }, pending ? '正在准备…' : '重试准备') : null))))
+              h('button', { type: 'button', className: 'fb-tab', disabled: pending, onClick: () => run(() => request({ action: 'initialize', sessionId: current() }), '使用当前工作区') }, '使用当前对话工作区'),
+              !failed ? h('button', { type: 'button', className: 'fb-tab', disabled: pending, onClick: retry }, pending ? '正在准备…' : '重试准备') : null))),
+        diag)
     }
     return h('section', { 'aria-label': '数据与依赖', style: { marginBlock: '16px', overflowWrap: 'anywhere' } },
       h('h3', null, '数据与依赖'),
@@ -126,13 +163,17 @@ function installDataClient(React, ctx, component) {
     const useRef = React.useRef
 
     const STYLE = `
-.fb-root{box-sizing:border-box;max-width:720px;width:100%;color:var(--dsw-alias-label-primary, #1f2328);font:inherit;font-size:14px;line-height:1.6}
+.fb-root{box-sizing:border-box;max-width:none;width:100%;color:var(--dsw-alias-label-primary, #1f2328);font:inherit;font-size:14px;line-height:1.6}
 .fb-root *,.fb-root *::before,.fb-root *::after{box-sizing:border-box}
 .fb-head{margin:0 0 20px}
 .fb-title{margin:0;display:flex;align-items:center;gap:8px;font-size:18px;font-weight:600;line-height:1.4}
 .fb-title .fb-icon,.fb-name .fb-icon{color:var(--dsw-alias-brand-primary, #2f6feb)}
 .fb-sub{margin:6px 0 0;color:var(--dsw-alias-label-secondary, #5b6570);font-size:13px}
-.fb-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.fb-tabs{display:flex;flex-wrap:wrap;gap:0;margin:0 0 20px;border-bottom:1px solid var(--dsw-alias-border-l2, #d3d8de)}
+.fb-nav{appearance:none;display:inline-flex;align-items:center;gap:6px;padding:9px 14px;font:inherit;font-size:13.5px;color:var(--dsw-alias-label-secondary, #5b6570);background:transparent;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer;transition:color .12s ease,border-color .12s ease}
+.fb-nav:hover{color:var(--dsw-alias-label-primary, #1f2328);background:var(--dsw-alias-bg-layer-2, rgba(128,128,128,.06))}
+.fb-nav[aria-pressed="true"]{color:var(--dsw-alias-brand-primary, #2f6feb);border-bottom-color:var(--dsw-alias-brand-primary, #2f6feb);font-weight:600}
+.fb-nav:focus-visible{outline:2px solid var(--dsw-alias-brand-primary, #2f6feb);outline-offset:2px;border-radius:2px}
 .fb-tab{appearance:none;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;font:inherit;font-size:13px;color:var(--dsw-alias-label-secondary, #5b6570);background:transparent;border:1px solid var(--dsw-alias-border-l2, #d3d8de);border-radius:var(--dsw-radius-sm, 6px);cursor:pointer;transition:background-color .12s ease,border-color .12s ease}
 .fb-tab:hover{background:var(--dsw-alias-bg-layer-2, rgba(128,128,128,.08))}
 .fb-tab[aria-pressed="true"]{color:var(--dsw-alias-brand-primary, #2f6feb);border-color:var(--dsw-alias-brand-primary, #2f6feb);background:var(--dsw-alias-bg-layer-2, rgba(128,128,128,.08));background:color-mix(in srgb, var(--dsw-alias-brand-primary, #2f6feb) 12%, transparent);font-weight:600}
@@ -176,6 +217,63 @@ function installDataClient(React, ctx, component) {
 .fb-task-readable{margin-top:24px}.fb-task-readable h3{margin-bottom:8px}.fb-task-readable li{margin:8px 0}.fb-task-readable ul,.fb-task-readable ol{padding-inline-start:24px}
 .fb-tasks select{min-width:0}.fb-tasks fieldset{min-width:0;margin-inline:0}.fb-task-modes{padding:12px}.fb-tasks .fb-data-actions{align-items:center}
 @media(max-width:480px){.fb-detail{padding:14px}.fb-tasks .fb-data-actions{gap:8px}.fb-tasks .fb-tab{padding:8px 10px}.fb-task-modes{gap:12px}}
+.fb-page{margin-top:4px}
+.fb-sec{margin:18px 0 0;border:1px solid var(--dsw-alias-border-l2,#d3d8de);background:var(--dsw-alias-bg-layer-1,transparent);border-radius:var(--dsw-radius-md,10px);padding:18px 20px;box-shadow:0 1px 2px color-mix(in srgb,var(--dsw-alias-border-l2,#d3d8de) 35%,transparent)}
+.fb-sec>:first-child{margin-top:0}
+.fb-sec h3{margin:0 0 6px;font-size:16px;font-weight:600}
+.fb-sec h4{margin:16px 0 8px;font-size:14px;font-weight:600}
+.fb-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:14px}
+.fb-card{border:1px solid var(--dsw-alias-border-l1,#e2e6ea);border-radius:var(--dsw-radius-sm,8px);padding:14px;background:var(--dsw-alias-bg-layer-1,transparent)}
+.fb-card.sel{border-color:var(--dsw-alias-brand-primary,#2f6feb);background:color-mix(in srgb,var(--dsw-alias-brand-primary,#2f6feb) 6%,transparent)}
+.fb-card h4{margin:0 0 4px;font-size:14px}
+.fb-card p{margin:6px 0;font-size:13px;color:var(--dsw-alias-label-secondary,#5b6570)}
+.fb-card button{margin-top:8px}
+.fb-badge{display:inline-block;padding:2px 8px;margin-left:6px;border:1px solid var(--dsw-alias-border-l2,#d3d8de);border-radius:999px;font-size:11px;font-weight:600;line-height:1.6;color:var(--dsw-alias-label-secondary,#5b6570);background:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.08))}
+.fb-badge.ok{color:#1a7f37;border-color:#72c48f;background:#e9f7ef}
+.fb-badge.warn{color:#9a6700;border-color:#e0b96a;background:#fff7e6}
+.fb-badge.error{color:var(--dsw-alias-label-error,#c0392b);border-color:#e6a19b;background:#fdecea}
+.fb-badge.info{color:var(--dsw-alias-brand-primary,#2f6feb);border-color:#9dc1f5;background:#eef4ff}
+.fb-note-box{margin:14px 0;padding:12px 14px;border:1px solid var(--dsw-alias-border-l1,#e2e6ea);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.06));font-size:13px;color:var(--dsw-alias-label-secondary,#5b6570)}
+.fb-error-box{margin:14px 0;padding:12px 14px;border:1px solid #e6a19b;border-radius:var(--dsw-radius-sm,8px);background:#fdecea;color:var(--dsw-alias-label-error,#c0392b);font-size:13px}
+.fb-warn-box{margin:14px 0;padding:12px 14px;border:1px solid #e0b96a;border-radius:var(--dsw-radius-sm,8px);background:#fff7e6;color:#7a5200;font-size:13px}
+.fb-kv{margin:8px 0;font-size:13px;display:flex;gap:10px;flex-wrap:wrap}
+.fb-kv b{font-weight:600;color:var(--dsw-alias-label-secondary,#5b6570);min-width:82px}
+.fb-kv span{overflow-wrap:anywhere}
+.fb-detail-grid{display:grid;grid-template-columns:minmax(180px,240px) 1fr;gap:16px;margin-top:14px}
+.fb-detail-grid ul{list-style:none;margin:0;padding:0}
+.fb-detail-grid li{margin:0 0 6px}
+.fb-detail-grid li button{width:100%;text-align:left;justify-content:flex-start}
+.fb-check{margin-top:12px;padding:12px;border:1px dashed var(--dsw-alias-border-l2,#d3d8de);border-radius:var(--dsw-radius-sm,8px);font-size:13px}
+.fb-plugin-group{margin:14px 0;border:1px solid var(--dsw-alias-border-l1,#e2e6ea);border-radius:var(--dsw-radius-sm,8px);padding:12px 14px}
+.fb-plugin-group>h4{margin:0 0 8px}
+.fb-plugin-row{padding:10px 0;border-top:1px solid var(--dsw-alias-border-l1,#e2e6ea)}
+.fb-plugin-row:first-of-type{border-top:0}
+.fb-plugin-row h5{margin:0 0 4px;font-size:13px;font-weight:600}
+.fb-plugin-row p{margin:4px 0;font-size:12.5px}
+.fb-plugin-row .fb-data-actions{margin-top:8px}
+.fb-diag{margin-top:18px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l1,#e2e6ea)}
+.fb-diag h4{margin:0 0 8px;font-size:14px}
+.fb-diag-list{list-style:none;padding:0;margin:0}
+.fb-diag-list li{margin:8px 0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1,#e2e6ea);border-radius:6px;font-size:12.5px}
+.fb-diag-list pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:6px 0 0}
+.fb-copy-ok{margin-left:8px;color:#1a7f37;font-size:12px}
+.fb-subtle{font-size:12px;color:var(--dsw-alias-label-secondary,#5b6570)}
+.fb-lead{margin:0 0 4px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l1,#e2e6ea);border-radius:var(--dsw-radius-md,10px);background:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.06));font-size:13.5px;line-height:1.7}
+.fb-lead b{font-weight:600}
+.fb-stage{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 4px}
+.fb-chip{padding:6px 14px;border:1px solid var(--dsw-alias-border-l2,#d3d8de);border-radius:999px;font-size:13px;color:var(--dsw-alias-label-secondary,#5b6570);background:var(--dsw-alias-bg-layer-1,transparent)}
+.fb-chip.done{border-color:var(--dsw-alias-brand-primary,#2f6feb);color:var(--dsw-alias-brand-primary,#2f6feb);background:#f0f5ff}
+.fb-chip.now{border-color:var(--dsw-alias-label-primary,#0f1115);color:var(--dsw-alias-label-primary,#0f1115);background:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.08));font-weight:600}
+.fb-cap-row{display:flex;gap:12px;align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--dsw-alias-border-l1,#e2e6ea)}
+.fb-cap-row:last-child{border-bottom:0}
+.fb-cap-row .fb-badge{margin:0;flex:0 0 auto}
+.fb-cap-t{font-weight:600;font-size:13.5px}
+.fb-cap-d{margin-top:2px;color:var(--dsw-alias-label-secondary,#5b6570);font-size:12.5px}
+.fb-next{margin:0;padding-left:22px}
+.fb-next li{margin:8px 0}
+.fb-statebar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 4px;padding:10px 14px;border:1px solid #e0b96a;border-radius:var(--dsw-radius-md,10px);background:#fff7e6;color:#7a5200;font-size:12.5px}
+.fb-foot{margin-top:14px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l1,#e2e6ea);font-size:12.5px;color:var(--dsw-alias-label-secondary,#5b6570)}
+@media(max-width:480px){.fb-sec{padding:14px}.fb-detail-grid{grid-template-columns:1fr}.fb-cards{grid-template-columns:1fr}.fb-plugin-row .fb-data-actions{gap:6px}.fb-nav{padding:9px 10px}.fb-lead{padding:12px}.fb-cap-row{gap:8px}}
 `
 
     /* 统一风格线性图标：内联 SVG stroke，无图标库，文字标签始终保留。 */
@@ -350,6 +448,344 @@ function installDataClient(React, ctx, component) {
             task.outputs.map(o => h('p', { key: o.revision, className: 'fb-path' }, '版本 ' + o.revision + ' · ' + o.path)),
             output ? h('section', { 'aria-label': '产出技术内容' }, h('p', null, output.historical ? '历史产出，不能冒充当前方案。' : '当前版本产出'), h('pre', { className: 'fb-task-output' }, JSON.stringify(output.page.items, null, 2)), nav(output.page, offset => readOutput(offset))) : null) : null))
     }
+    /* ---------- 五页组件（全部内联在同一 factory 内，遵守浏览器单文件约定） ---------- */
+    async function fetchJson(url, options) {
+      const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', ...(options || {}) })
+      let data = null
+      try { data = await response.json() } catch (_) { /* 非 JSON 响应按失败处理 */ }
+      if (!response.ok) throw new Error((data && (data.error || data.message)) || 'HTTP ' + response.status)
+      return data
+    }
+    function Intro({ title, desc, note, tone }) {
+      return h('div', null,
+        h('h3', { className: 'fb-name' }, title),
+        h('p', { className: 'fb-desc' }, desc),
+        note ? h('div', {
+          className: tone === 'error' ? 'fb-error-box' : tone === 'warn' ? 'fb-warn-box' : 'fb-note-box',
+          role: tone === 'error' ? 'alert' : null
+        }, note) : null)
+    }
+    function Retry({ onRetry, pending }) {
+      return h('button', { type: 'button', className: 'fb-tab fb-retry', disabled: !!pending, onClick: onRetry }, pending ? '重试中…' : '重试')
+    }
+    function stateBadge(value) {
+      const map = {
+        empty: ['info', '暂无数据'], ok: ['ok', '有数据'], partial: ['warn', '部分完成'], error: ['error', '读取失败'],
+        true: ['ok', '已登记'], false: ['neutral', '未登记'], unknown: ['warn', '未知']
+      }
+      const pair = map[String(value)] || ['neutral', String(value || '未标注')]
+      return h('span', { className: 'fb-badge ' + pair[0] }, pair[1])
+    }
+
+    function OverviewPanel({ onNavigate }) {
+      const [data, setData] = useState(null)
+      const [issue, setIssue] = useState('')
+      const [loading, setLoading] = useState(true)
+      const [retryKey, setRetryKey] = useState(0)
+      const liveRef = useRef(true)
+      useEffect(() => { liveRef.current = true; return () => { liveRef.current = false } }, [retryKey])
+      useEffect(() => {
+        let cancelled = false
+        setLoading(true); setIssue(''); setData(null)
+        fetchJson('/api/fish-body/overview')
+          .then(value => { if (!cancelled && liveRef.current) setData(value) })
+          .catch(error => { if (!cancelled && liveRef.current) setIssue(error.message) })
+          .finally(() => { if (!cancelled && liveRef.current) setLoading(false) })
+        return () => { cancelled = true }
+      }, [retryKey])
+      const items = Array.isArray(data?.items) ? data.items : []
+      const caps = [
+        ['ok', '可用', '插件来源 · 饭', '保存插件上游源码与下载材料，作为分析输入。'],
+        ['ok', '可用', '分析与拆分 · 胃 · 功能选择', '查看分析结果、挑选保留与排除的功能。'],
+        ['ok', '可用', '兼容方案 / 逆向材料生成', '兼容产出适配方案，逆向产出理解材料。'],
+        ['ok', '可用', '目录入口与内置 SHA-256 校验工具', '打开数据目录、按随包校验和释放。'],
+        ['todo', '待接入', '兼容可安装派生产物 / 一键适配', '方案之后的安装尚未实现，本页不放可执行安装按钮。']
+      ]
+      return h('div', { className: 'fb-page' },
+        h(Intro, { title: '总览', desc: '从这里看清插件从哪来、怎么分析拆分、装成什么组件，以及当前做到哪一步。' }),
+        h('div', { className: 'fb-sec' },
+          h('p', { className: 'fb-lead' },
+            '鱼的身体把一条线串起来：',
+            h('b', null, '插件从哪来（饭）→ 怎么分析拆分（胃）→ 装成什么组件（手）'),
+            '。下面说明身体能做什么、进度如何确认，以及你可以从哪里继续。')
+        ),
+        h('div', { className: 'fb-sec' },
+          h('h3', null, '目前做到哪一步'),
+          h('div', { className: 'fb-stage' },
+            h('span', { className: 'fb-chip' }, '○ 任务阶段：未确认')),
+          h('p', { className: 'fb-note' }, '总览接口只提供分区摘要，不含具体任务的阶段或产出。请在「胃·分析」选择任务后查看真实状态；本页不预设完成进度，也不把软件已具备的能力当作某个任务已完成。')
+        ),
+        h('div', { className: 'fb-sec' },
+          h('h3', null, '身体能做什么 ', h('span', { className: 'fb-subtle' }, '— 已具备与待接入分开看')),
+          caps.map(([tone, label, title, desc]) => h('div', { key: title, className: 'fb-cap-row' },
+            h('span', { className: 'fb-badge ' + (tone === 'ok' ? 'ok' : '') }, label),
+            h('div', null, h('div', { className: 'fb-cap-t' }, title), h('div', { className: 'fb-cap-d' }, desc))))
+        ),
+        h('div', { className: 'fb-sec' },
+          h('h3', null, '用户下一步做什么'),
+          h('ol', { className: 'fb-next' },
+            h('li', null, '在「饭·来源」核对已保存的来源材料，作为分析输入。'),
+            h('li', null, '在「胃·分析」选择已有任务或分析结果，查看功能取舍与方案进度。'),
+            h('li', null, '在「手·组件」查看登记与原生状态；是否启用由你在原生插件开关中决定。'))
+        ),
+        h('div', { className: 'fb-sec' },
+          h('h3', null, '三个分区的当前状态'),
+          h('p', { className: 'fb-note' }, '状态来自同一份只读概览；某一项读取失败只影响该项，点击卡片进入对应分区。'),
+          issue ? h('div', null, h('p', { className: 'fb-error', role: 'alert' }, '总览读取失败：' + issue), h(Retry, { onRetry: () => setRetryKey(k => k + 1) })) : null,
+          loading ? h('p', { className: 'fb-note', role: 'status' }, '正在读取总览…') : null,
+          !loading && !issue && !items.length ? h('div', { className: 'fb-note-box' }, '暂无分区摘要。') : null,
+          items.length ? h('div', { className: 'fb-cards' }, items.map(item => h('div', { key: item.key, className: 'fb-card' },
+            h('h4', null, item.title || item.key, stateBadge(item.state)),
+            h('p', null, item.summary || '暂无说明。'),
+            ['rice', 'stomach', 'hand'].includes(item.key) ? h('button', {
+              type: 'button', className: 'fb-tab',
+              onClick: () => { if (typeof onNavigate === 'function') onNavigate(item.key) }
+            }, '进入' + (item.title || '')) : null
+          ))) : null
+        ),
+        h('p', { className: 'fb-foot' }, '鱼的脑是独立设置项，不并入身体页面。 · 本页为只读概览，不打开文件夹、不启动分析、不检查版本；能力标记不代表真实安装或运行。')
+      )
+    }
+
+    function RicePanel({ onOpenFolder, sectionPath }) {
+      const [items, setItems] = useState(null)
+      const [issue, setIssue] = useState('')
+      const [checks, setChecks] = useState({})
+      const [retryKey, setRetryKey] = useState(0)
+      const [pendingOpen, setPendingOpen] = useState(false)
+      const [openIssue, setOpenIssue] = useState('')
+      const liveRef = useRef(true)
+      useEffect(() => { liveRef.current = true; return () => { liveRef.current = false } }, [retryKey])
+      useEffect(() => {
+        let cancelled = false
+        setIssue(''); setItems(null)
+        fetchJson('/api/fish-body/sources')
+          .then(value => { if (!cancelled && liveRef.current) setItems(Array.isArray(value?.items) ? value.items : []) })
+          .catch(error => { if (!cancelled && liveRef.current) setIssue(error.message) })
+        return () => { cancelled = true }
+      }, [retryKey])
+      const check = async id => {
+        if (checks[id]?.pending) return
+        setChecks(old => ({ ...old, [id]: { ...(old[id] || {}), pending: true, error: '' } }))
+        try {
+          const value = await fetchJson('/api/fish-body/check-version', {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id })
+          })
+          if (liveRef.current) setChecks(old => ({ ...old, [id]: { pending: false, result: value?.result || null, error: '' } }))
+        } catch (error) {
+          if (liveRef.current) setChecks(old => ({ ...old, [id]: { pending: false, result: null, error: error.message } }))
+        }
+      }
+      const open = async () => {
+        if (!sectionPath || pendingOpen) return
+        setPendingOpen(true); setOpenIssue('')
+        try {
+          const value = await fetchJson('/api/fish-body/open', {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ section: 'rice' })
+          })
+          if (!value?.ok && liveRef.current) setOpenIssue(value?.error || '打开失败。')
+        } catch (error) { if (liveRef.current) setOpenIssue(error.message) }
+        finally { if (liveRef.current) setPendingOpen(false) }
+      }
+      const compareText = { newer: '有新版', same: '相同', localNewer: '本地较新', unknown: '未知' }
+      const renderCheck = id => {
+        const c = checks[id]
+        if (!c) return null
+        if (c.pending) return h('p', { className: 'fb-note', role: 'status' }, '正在检查远端版本…')
+        if (c.error) return h('div', { className: 'fb-error-box', role: 'alert' }, h('strong', null, '暂时无法检查'), h('p', null, c.error))
+        const r = c.result
+        if (!r) return h('p', { className: 'fb-note' }, '本次检查没有返回结果。')
+        const historical = r.state === 'historical'
+        const valid = r.state === 'ok'
+        const cmpKey = r.comparison === 'local-newer' ? 'localNewer' : (r.comparison || 'unknown')
+        return h('div', { className: historical ? 'fb-warn-box' : 'fb-check', role: historical ? 'status' : null },
+          historical ? h('p', null, h('span', { className: 'fb-badge warn' }, '历史结果·当前未确认'), ' 本次检查未成功，下面是上次成功结果，不代表当前状态。') : null,
+          h('p', null, '本地版本：', r.localVersion || '未记录'),
+          h('p', null, '远端版本：', r.remoteVersion || '未取得'),
+          r.state === 'ok' ? h('p', null, '版本比较（后端结论）：', h('span', { className: 'fb-badge ' + (cmpKey === 'newer' ? 'warn' : 'info') }, compareText[cmpKey] || '未知')) : null,
+          r.state === 'incomparable' ? h('p', null, '版本不可比较，前端不做字符串比较。') : null,
+          r.state === 'unavailable' ? h('p', null, '没有可核实的远端来源。') : null,
+          r.state === 'error' ? h('p', null, '本次检查失败。') : null,
+          h('p', { className: 'fb-subtle' }, '本次检查时间：', r.checkedAt || '未记录'),
+          h('p', { className: 'fb-subtle' }, '上次成功时间：', r.lastSuccessAt || '无'),
+          r.reason ? h('p', { className: 'fb-subtle' }, '说明：', r.reason) : null,
+          h('details', null, h('summary', null, '技术原因（默认折叠）'), h('pre', { className: 'fb-task-output' }, JSON.stringify(r, null, 2)))
+        )
+      }
+      return h('div', { className: 'fb-page' },
+        h(Intro, {
+          title: '饭 · 插件来源与材料', desc: '保存其他插件的原始源码与来源，供「胃」分析。',
+          note: '这一页保存来源材料，作为「胃」分析的输入；材料已保存 ≠ 已安装 ≠ 安全。是否安装、是否信任由用户在别处决定。本页列表只读，不下载、不执行脚本、不安装。'
+        }),
+        issue ? h('div', null, h('p', { className: 'fb-error', role: 'alert' }, '来源列表读取失败：' + issue), h(Retry, { onRetry: () => setRetryKey(k => k + 1) })) : null,
+        !issue && !items ? h('p', { className: 'fb-note', role: 'status' }, '正在读取来源…') : null,
+        !issue && items && !items.length ? h('div', { className: 'fb-note-box' }, '暂无已登记来源。') : null,
+        items && items.length ? h('div', { className: 'fb-cards' }, items.map(item => h('div', { key: item.id, className: 'fb-card' },
+          h('h4', null, item.name || item.id, h('span', { className: 'fb-badge info' }, item.sourceType || 'unknown')),
+          h('p', null, '本地版本：', item.localVersion || '未记录'),
+          h('p', null, item.description || '暂无来源说明。'),
+          item.path ? h('p', { className: 'fb-subtle' }, '材料目录：', item.path) : null,
+          item.hasRemote ? h('button', {
+            type: 'button', className: 'fb-tab', disabled: !!checks[item.id]?.pending,
+            onClick: () => check(item.id)
+          }, checks[item.id]?.pending ? '正在检查…' : '检查远端版本') : h('p', { className: 'fb-subtle' }, '无远端来源；不标"已是最新"。'),
+          renderCheck(item.id)
+        ))) : null,
+        h('div', { className: 'fb-sec' },
+          h('h4', null, '材料目录'),
+          sectionPath ? h('button', {
+            type: 'button', className: 'fb-tab', disabled: pendingOpen,
+            'aria-busy': pendingOpen ? 'true' : 'false', onClick: open
+          }, pendingOpen ? '正在打开…' : '打开材料目录（唯一入口）') : h('p', { className: 'fb-subtle' }, '此分区没有绑定目录，不提供打开按钮。'),
+          openIssue ? h('p', { className: 'fb-error', role: 'alert' }, openIssue) : null,
+          h('p', { className: 'fb-note' }, '本页不下载、不分析、不安装。没有远端来源的本地材料不标"已是最新"。手动检查版本不代表安装授权。')
+        )
+      )
+    }
+
+    function HandPanel({ onOpenFolder, sectionPath }) {
+      const [items, setItems] = useState(null)
+      const [issue, setIssue] = useState('')
+      const [gap, setGap] = useState(null)
+      const [ops, setOps] = useState({})
+      const [retryKey, setRetryKey] = useState(0)
+      const [openIssue, setOpenIssue] = useState('')
+      const [pendingOpen, setPendingOpen] = useState(false)
+      const liveRef = useRef(true)
+      useEffect(() => { liveRef.current = true; return () => { liveRef.current = false } }, [retryKey])
+      const refresh = () => {
+        let cancelled = false
+        setIssue(''); setGap(null)
+        fetchJson('/api/fish-body/plugin-switch/state')
+          .then(value => {
+            if (cancelled || !liveRef.current) return
+            if (value?.ok === false && value?.error?.code === 'native-api-unavailable') { setGap(value.error); setItems(null) }
+            else setItems(Array.isArray(value?.items) ? value.items : [])
+          })
+          .catch(error => { if (!cancelled && liveRef.current) setIssue(error.message) })
+        return () => { cancelled = true }
+      }
+      useEffect(() => refresh(), [retryKey])
+      const toggle = async (item, enabled) => {
+        if (ops[item.pluginId]?.pending) return
+        setOps(old => ({ ...old, [item.pluginId]: { pending: true, error: '' } }))
+        try {
+          const value = await fetchJson('/api/fish-body/plugin-switch', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ pluginId: item.pluginId, enabled })
+          })
+          if (value?.ok === false && value?.error?.code === 'native-api-unavailable') {
+            if (liveRef.current) { setGap(value.error); setOps(old => ({ ...old, [item.pluginId]: { pending: false, error: '' } })) }
+            return
+          }
+          if (liveRef.current) setOps(old => ({ ...old, [item.pluginId]: { pending: false, result: value?.result || null, error: '' } }))
+        } catch (error) {
+          if (liveRef.current) setOps(old => ({ ...old, [item.pluginId]: { pending: false, error: error.message } }))
+        } finally {
+          if (liveRef.current) refresh()
+        }
+      }
+      const open = async () => {
+        if (!sectionPath || pendingOpen) return
+        setPendingOpen(true); setOpenIssue('')
+        try {
+          const value = await fetchJson('/api/fish-body/open', {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ section: 'hand' })
+          })
+          if (!value?.ok && liveRef.current) setOpenIssue(value?.error || '打开失败。')
+        } catch (error) { if (liveRef.current) setOpenIssue(error.message) }
+        finally { if (liveRef.current) setPendingOpen(false) }
+      }
+      const groups = {}
+      for (const item of (items || [])) { const key = item.source || '未标注来源'; (groups[key] = groups[key] || []).push(item) }
+      const runtimeLabel = { unknown: '暂无反馈', running: '正在运行', stopped: '已停止', error: '加载或运行失败' }
+      const enabledLabel = (v) => v === true ? '已启用' : v === false ? '已关闭' : '未确认'
+      const requestLabel = { on: '已提交启动请求', off: '已提交关闭请求', error: '请求失败' }
+      return h('div', { className: 'fb-page' },
+        h(Intro, {
+          title: '鱼的手 · 组件与能力', desc: '查看接入的组件、它们提供的能力和来源，并可管理来源插件的启停。'
+        }),
+        h('div', { className: 'fb-sec' },
+          h('div', { className: 'fb-statebar' },
+            h('b', null, '状态口径：'), '已登记 ≠ 已安装 ≠ 已启用 ≠ 正在运行。没有运行证据的组件显示「暂无反馈」，登记状态不等于宿主真的在跑。')
+        ),
+        gap ? h('div', { className: 'fb-warn-box', role: 'status' },
+          h('strong', null, '原生启停接口缺口'),
+          h('p', null, '当前宿主未提供可核实的原生插件启停接口，因此不提供启停按钮；下方状态只反映已登记与可核实信息，不代表正在运行。'),
+          h('details', null,
+            h('summary', null, '缺口说明与核查证据（技术详情）'),
+            gap.message ? h('p', { className: 'fb-subtle' }, gap.message) : null,
+            gap.evidence ? h('pre', { className: 'fb-task-output' }, typeof gap.evidence === 'string' ? gap.evidence : JSON.stringify(gap.evidence, null, 2)) : null)) : null,
+        issue ? h('div', null, h('p', { className: 'fb-error', role: 'alert' }, '原生状态读取失败：' + issue), h(Retry, { onRetry: () => setRetryKey(k => k + 1) })) : null,
+        !gap && !issue && !items ? h('p', { className: 'fb-note', role: 'status' }, '正在读取原生状态…') : null,
+        !gap && !issue && items && !items.length ? h('div', { className: 'fb-note-box' }, '暂无可核实的来源插件状态。') : null,
+        Object.keys(groups).map(source => h('div', { key: source, className: 'fb-plugin-group' },
+          h('h4', null, '按来源插件分组：', source),
+          groups[source].map(item => {
+            const op = ops[item.pluginId] || {}
+            const canSwitch = item.installed === true && !!item.nativeId && gap === null
+            const whyNo = !item.installed ? '未安装，不提供启停按钮。' : !item.nativeId ? '身份映射不明，不提供启停按钮。' : null
+            return h('div', { key: item.pluginId, className: 'fb-plugin-row' },
+              h('h5', null, item.pluginId,
+                h('span', { className: 'fb-badge ' + (item.registered ? 'ok' : '') }, '登记状态：' + (item.registered ? '已登记' : '未登记'))),
+              h('p', null, '安装状态：', h('span', { className: 'fb-badge' }, item.installed ? '已安装' : '未安装')),
+              h('p', null, '启用状态：', h('span', { className: 'fb-badge ' + (item.enabled === true ? 'ok' : item.enabled === false ? '' : 'warn') }, enabledLabel(item.enabled))),
+              h('p', null, '运行情况：', h('span', { className: 'fb-badge ' + (item.runtime === 'error' ? 'error' : item.runtime === 'unknown' ? 'warn' : 'info') }, runtimeLabel[item.runtime] || '暂无反馈')),
+              op.result ? h('p', { className: 'fb-note' }, '本次操作结果（仅表示请求已提交，不代表运行正常）：', h('span', { className: 'fb-badge ' + (op.result.state === 'error' ? 'error' : 'info') }, requestLabel[op.result.state] || op.result.state || '未知')) : null,
+              op.error ? h('p', { className: 'fb-error', role: 'alert' }, '启停失败：' + op.error) : null,
+              canSwitch ? h('div', { className: 'fb-data-actions' },
+                h('button', {
+                  type: 'button', className: 'fb-tab', disabled: op.pending || item.enabled === true,
+                  onClick: () => toggle(item, true)
+                }, op.pending ? '操作中…' : '启动'),
+                h('button', {
+                  type: 'button', className: 'fb-tab', disabled: op.pending || item.enabled === false,
+                  onClick: () => toggle(item, false)
+                }, op.pending ? '操作中…' : '关闭')
+              ) : h('p', { className: 'fb-subtle' }, whyNo || '无原生接口证据，不提供启停按钮。'),
+              h('details', { className: 'fb-tech-detail' },
+                h('summary', null, '技术详情（原生 ID、来源与原始说明）'),
+                h('p', { className: 'fb-subtle' }, '原生 ID：', item.nativeId || '未核实'),
+                h('p', { className: 'fb-subtle' }, '来源：', item.source || '未标注'),
+                item.message ? h('p', { className: 'fb-subtle' }, '原始说明：', item.message) : null,
+                op.result && op.result.message ? h('p', { className: 'fb-subtle' }, '请求原文：', op.result.message) : null)
+            )
+          })
+        )),
+        h('div', { className: 'fb-sec' },
+          h('h4', null, '组件目录'),
+          sectionPath ? h('button', {
+            type: 'button', className: 'fb-tab', disabled: pendingOpen, onClick: open
+          }, pendingOpen ? '正在打开…' : '打开组件目录') : h('p', { className: 'fb-subtle' }, '此分区没有绑定目录，不提供打开按钮。'),
+          openIssue ? h('p', { className: 'fb-error', role: 'alert' }, openIssue) : null,
+          h('details', null, h('summary', null, '启停说明（技术详情）'), h('p', { className: 'fb-note' }, '启动/关闭只操作你点击的目标来源插件，不批量、不安装卸载、不写 Profile，也不自动启用脑或身体。操作后自动重新读取只读状态。'))
+        ),
+        h('p', { className: 'fb-foot' }, '鱼的脑是独立设置项，不并入身体页面。 · 启停按钮仅提交请求，实际加载状态需刷新只读状态入口确认。')
+      )
+    }
+
+    function SettingsPanel({ onState, lifecycle }) {
+      return h('div', { className: 'fb-page' },
+        h(Intro, {
+          title: '设置与帮助', desc: '查看数据位置、运行纪律与近期诊断记录。'
+        }),
+        lifecycle ? h('div', { className: 'fb-sec' },
+          h('h4', null, '当前运行状态'),
+          h('p', { className: 'fb-note', role: 'status', 'aria-live': 'polite' }, lifecycle.message || '状态已读取。')
+        ) : null,
+        h('div', { className: 'fb-sec' },
+          h('details', null,
+            h('summary', null, '运行纪律与工程约束（技术详情）'),
+            h('p', { className: 'fb-note' }, '「鱼的身体」由插件页原生开关统一控制：关闭后「饭→胃→手」统一接入流程、本设置页与内置 SHA-256 工具一并停用；如需按该流程安装，请由用户在插件页手动开启「鱼的身体」，模型不得自行开启。关闭期间普通插件安装仍走 DSH 原生机制，已安装的独立插件（如 dsh-context）不受影响。'),
+            h('p', { className: 'fb-note' }, '启停只操作用户点击的目标来源插件：不批量、不安装卸载、不写 Profile，也不自动启用脑或身体。登记状态不等于已安装、已加载或实测可用；没有运行证据一律显示「暂无反馈」。'),
+            h('p', { className: 'fb-note' }, '身体自身未加载或关闭时，可能没有自己的设置页可打开；此时应看 DSH 原生插件页的错误提示，不能理解为"卸载后还能自报错误"。')
+          )
+        ),
+        h(FishDataPanel, { onState: typeof onState === 'function' ? onState : undefined }),
+        h('p', { className: 'fb-foot' }, '鱼的脑是独立设置项，不并入身体页面，也不加入人格 / 记忆编辑器。')
+      )
+    }
+
     function FishBodySection() {
       const [sections, setSections] = useState(null)
       const [loadError, setLoadError] = useState(null)
@@ -463,7 +899,7 @@ function installDataClient(React, ctx, component) {
           key: item.id,
           ref: (node) => { tabRefs.current[index] = node },
           type: 'button',
-          className: 'fb-tab',
+          className: 'fb-nav',
           role: 'tab',
           'aria-pressed': active === item.id ? 'true' : 'false',
           'aria-selected': active === item.id ? 'true' : 'false',
@@ -472,6 +908,7 @@ function installDataClient(React, ctx, component) {
         }, item.title))
       )
 
+      /* 五页分发：每页自带标题说明；文件夹入口仅在该 section 有真实目录时渲染。 */
       let body
       if (loadError) {
         body = h('div', null,
@@ -487,40 +924,39 @@ function installDataClient(React, ctx, component) {
       } else if (!current) {
         body = h('p', { className: 'fb-note', role: 'status' }, '分区信息不可用。')
       } else {
-        body = h('div', { className: 'fb-detail' },
-          h('h3', { className: 'fb-name' }, Icon('layers', 17), current.title),
-          h('p', { className: 'fb-desc' }, current.description),
-          h('div', { className: 'fb-label' }, Icon('folder', 14), '文件夹'),
+        const id = current.id
+        const hasPath = !!current.path
+        const folderBar = hasPath ? h('div', { className: 'fb-sec' },
+          h('h4', null, Icon('folder', 14), '文件夹'),
           h('p', { className: 'fb-path' }, current.path),
           h('div', { className: 'fb-actions' },
             h('button', {
-              type: 'button',
-              className: 'fb-open',
+              type: 'button', className: 'fb-open',
               'aria-disabled': pending ? 'true' : 'false',
-              'aria-busy': pending ? 'true' : 'false',
-              onClick: openFolder
+              'aria-busy': pending ? 'true' : 'false', onClick: openFolder
             }, Icon('external', 15), pending ? '正在打开…' : '打开文件夹')
           ),
-          error ? h('p', { className: 'fb-error', role: 'alert' },
-            error,
-            h('br'),
-            h('span', { className: 'fb-error-path' }, current.path)
-          ) : null
-        )
+          error ? h('p', { className: 'fb-error', role: 'alert' }, error, h('br'),
+            h('span', { className: 'fb-error-path' }, current.path)) : null
+        ) : null
+        if (id === 'overview') body = h(OverviewPanel, { onNavigate: switchTo })
+        else if (id === 'rice') body = h(RicePanel, { onOpenFolder: openFolder, sectionPath: current.path })
+        else if (id === 'stomach') body = h('div', null,
+          h(Intro, { title: '胃 · 分析与拆分', desc: '查看分析过程、已保存的功能选择与产出。', note: '刷新任务状态只读取当前状态，不会自动重扫、生成包或安装。' }),
+          h(StomachTasks), folderBar)
+        else if (id === 'hand') body = h(HandPanel, { onOpenFolder: openFolder, sectionPath: current.path })
+        else if (id === 'settings') body = h(SettingsPanel, { onState: () => setRetryKey(key => key + 1), lifecycle })
+        else body = h('div', { className: 'fb-note-box' }, '未知分区：' + id)
       }
 
       return h('div', { className: 'fb-root' },
         h('style', { dangerouslySetInnerHTML: { __html: STYLE } }),
         h('div', { className: 'fb-head' },
           h('h2', { className: 'fb-title' }, Icon('layers', 18), '鱼的身体'),
-          h('p', { className: 'fb-sub' }, '管理插件来源、处理过程与可用工具。'),
-          lifecycle ? h('p', { className: 'fb-sub', role: 'status', 'aria-live': 'polite' }, lifecycle.message) : null,
-          h('p', { className: 'fb-sub' }, '「鱼的身体」由插件页原生开关统一控制：关闭后「饭→胃→手」统一接入流程、本设置页与内置 SHA-256 工具一并停用；如需按该流程安装，请由用户在插件页手动开启「鱼的身体」，模型不得自行开启。关闭期间普通插件安装仍走 DSH 原生机制，已安装的独立插件（如 dsh-context）不受影响。')
+          h('p', { className: 'fb-sub' }, '管理插件来源、处理过程与可用工具。')
         ),
-        h(FishDataPanel, { onState: () => setRetryKey(key => key + 1) }),
         tabs,
-        body,
-        current?.id === 'stomach' ? h(StomachTasks) : null
+        body
       )
     }
 
