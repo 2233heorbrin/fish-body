@@ -219,7 +219,24 @@ function tryAttachNativeBridge(ctx, mod, aliases = new Map()) {
   try {
     if (!mod?.NATIVE_BRIDGE_SLOT) return null
     const slot = mod.NATIVE_BRIDGE_SLOT
-    const manager = ctx?.get?.('remote')?.pluginManager ?? ctx?.remote?.pluginManager
+    // 按需顺序读取候选，取第一个具备 listPlugins/setPluginEnabled 的对象后立即停止，
+    // 不再读后续路径：先求值全部 Cordis 属性会让后续属性访问抛错时连已找到的有效服务一起丢掉。
+    // listBundles/setBundleEnabled 是 bundle 分支的可选能力，不作共同门槛。
+    function pickManager() {
+      const probes = [
+        () => ctx?.get?.('pluginManager'),         // 宿主真实路径：Cordis 本地服务
+        () => ctx?.pluginManager,                  // 宿主工具直接取法
+        () => ctx?.get?.('remote')?.pluginManager, // 原路径保留兼容
+        () => ctx?.remote?.pluginManager,          // 原路径保留兼容
+      ]
+      for (const probe of probes) {
+        let m
+        try { m = probe() } catch { continue }      // 单个路径读取失败不影响后续
+        if (m && typeof m.listPlugins === 'function' && typeof m.setPluginEnabled === 'function') return m
+      }
+      return null
+    }
+    const manager = pickManager()
     if (!manager || typeof manager.listPlugins !== 'function' || typeof manager.setPluginEnabled !== 'function') return null
 
     /* fish_hand 手登记身份集合（登记≠安装≠挂载）：只用于 registered 显示，绝不当操作门。 */
@@ -573,7 +590,8 @@ export async function apply(ctx, config = {}) {
       // 模块未就绪：给每个登记候选一个缺口项，enabled=null/runtime=unknown，绝不显示假状态。
       return jsonResponse(request, { ok: true, items: registered.map((pluginId) => ({
         pluginId, nativeId: null, installed: false, enabled: null, runtime: 'unknown',
-        registered: true, source: pluginId, message: '原生插件开关适配模块尚未就绪，状态未确认。'
+        registered: registered.includes(pluginId), code: 'native-api-unavailable', source: pluginId,
+        message: '原生插件开关适配模块尚未就绪，状态未确认。'
       })) })
     }
     const { mod, bridge } = loaded
@@ -589,13 +607,15 @@ export async function apply(ctx, config = {}) {
           installed: row.installed === true,
           enabled: row.enabled === true ? true : row.enabled === false ? false : null,
           runtime: ['running', 'stopped', 'error'].includes(row.runtime) ? row.runtime : 'unknown',
-          registered: row.registered === true,
+          registered: registered.includes(pluginId),
+          ...(typeof row.code === 'string' && row.code ? { code: row.code } : {}),
           source: row.source ?? pluginId,
           message: typeof row.message === 'string' ? row.message : ''
         })
       } catch {
         items.push({ pluginId, nativeId: null, installed: false, enabled: null, runtime: 'unknown',
-          registered: true, source: pluginId, message: '读取原生状态失败，当前未确认。' })
+          registered: registered.includes(pluginId), code: 'read-state-failed', source: pluginId,
+          message: '读取原生状态失败，当前未确认。' })
       }
     }
     return jsonResponse(request, { ok: true, items })

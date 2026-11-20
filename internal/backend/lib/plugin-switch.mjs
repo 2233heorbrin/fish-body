@@ -182,7 +182,7 @@ export async function readPluginSwitchState(pluginId, bridge) {
   }
   const target = classifyPluginTarget(pluginId);
   if (!target.ok) {
-    return { ...base, message: 'pluginId 为空或身份映射不明，未给出可执行启停项。' };
+    return { ...base, code: 'unmappable-target', message: 'pluginId 为空或身份映射不明，未给出可执行启停项。' };
   }
   try {
     const raw = await scope.bridge.readState(target.nativeId);

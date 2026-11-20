@@ -1,5 +1,13 @@
 # 更新记录
 
+## 0.0.7-dev.7 — 2026-11-20（鱼身体 UI 预览对齐 + 设置误报修正测试版）
+
+- 在 dev.6 基础上按认可预览图对齐鱼身体五页 UI：总览 / 饭·来源 / 胃·分析 / 手·组件 / 设置与帮助的内容区版式、信息层级、状态口径与异常态逐页收敛；同 CSS 尺度对照图与逐页必要差异见结果目录。本轮同时含前端展示与后端最小接线改动，并非仅前端。
+- 后端最小状态 / 启停接线：`index.js` 的 `pickManager()` 按需惰性探测宿主本地 pluginManager（`ctx.get('pluginManager')` → `ctx.pluginManager` → 旧 remote 两路兼容，找到即停、单探针抛错跳过），`registered` 用手登记真值不被缺口覆盖，`/plugin-switch/state` 透传可判别 code（`native-api-unavailable` / `read-state-failed` / `unmappable-target`）；`plugin-switch.mjs` 身份不明补 `unmappable-target`。不改宿主 / 协议，缺口仍降级不画假成功。
+- 修正设置页「目录失效」误报：`dataProblem` 只依据目录类状态（`invalid-root` / `pending-workspace` / `pending-initialization` / `invalid-config`）与顶层 `error` 判定，彻底移除宿主依赖错误（`dependencies.error`，如 `FISH_NATIVE_INSTALL_INTERCEPT_UNAVAILABLE`）对目录问题的影响；宿主依赖状态仍沿设置页「程序准备 / 宿主暂不支持完整安装接管」独立显示，不因本次修正消失。
+- 浏览器两场景实测：状态 `ready` + `dependencies.status=host-blocked` 不再显示「原数据目录不可访问」且保留宿主依赖状态提示；状态 `invalid-root` 仍显示「原数据目录不可访问」。`node --check` 与既有 41 项 UI 契约测试通过。
+- 仅本地测试分支与打包验证；未日常安装、未重启或改动日常 DSH、未切插件、未推送 / 合并 / 打 tag / Release / registry，不覆盖已日常安装的 dev.6。
+
 ## 0.0.7-dev.6 — 2026-11-20（鱼身体 UI 五页分支测试版）
 
 - 设置页「鱼的身体」由单一分区扩为顶部五导航：总览 / 饭·来源 / 胃·分析 / 手·组件 / 设置与帮助；导航项来自 `GET /api/fish-body/sections` 的固定五项，方向键 / Home / End 焦点与切换保留，局部失败只影响该区。
