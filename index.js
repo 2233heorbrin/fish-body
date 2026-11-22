@@ -9,8 +9,8 @@ import { mountProfileData } from './internal/profile-data.js'
 import { bodyProfileData } from './internal/body-data.js'
 import * as localSwitch from './internal/backend/lib/body-switch.mjs'
 import { prepareBackend } from './internal/backend-entry.js'
-import { overview as riceOverview, publicSources, listRiceSources, findRiceSource } from './internal/backend/lib/rice-model.mjs'
-import { checkVersion } from './internal/backend/lib/version-check.mjs'
+import { overview as riceOverview, publicSources, listRiceSources, findRiceSource, attachInstallToSources } from './internal/backend/lib/rice-model.mjs'
+import { checkVersionAsync, checkVersionsBatch } from './internal/backend/lib/version-check.mjs'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
@@ -560,26 +560,75 @@ export async function apply(ctx, config = {}) {
 
   /* GET 来源列表：只读已落盘材料，剔内部字段；不触发下载/npm/分析/安装/版本查询。 */
   register(ctx, '/api/fish-body/sources', ['GET', 'HEAD'], request =>
-    jsonResponse(request, { ok: true, items: publicSources({ frameworkRoot: frameworkRoot() }) }))
+    // profileDir 取自宿主上下文（非硬编码/非探测其他 Profile），供 install 字段只读核实当前安装来源。
+    jsonResponse(request, { ok: true, items: publicSources({ frameworkRoot: frameworkRoot(), profileDir: data.profileDir }) }))
 
-  /* POST 手动检查远端版本：只接受已登记来源 id，拒任意 URL/本地路径（防开放代理）。 */
+  /* POST 手动检查远端版本：只接受已登记来源 id，拒任意 URL/本地路径（防开放代理）。
+   * 走异步 checkVersionAsync（与批量同缓存/失败冷却/force/错误口径），避免 execFileSync 阻塞宿主；
+   * 可选 force 布尔（手动重试绕过失败冷却与成功缓存），其余字段一律拒收。 */
   register(ctx, '/api/fish-body/check-version', ['POST'], async (request) => {
     let payload
     try { payload = await request.json() } catch {
       return jsonResponse(request, { ok: false, error: '请求体不是有效 JSON。' }, 400)
     }
-    const id = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload.id : undefined
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return jsonResponse(request, { ok: false, error: '请求参数不合法。' }, 400)
+    }
+    const id = payload.id
     // 合法登记 id 本身就是 github.com/owner/repo、npm:<pkg>/<id> 这类含斜杠形态，不能用「含斜杠」当拒绝条件。
     // 防开放代理靠 rice-model 的已登记 id 精确核对（findRiceSource 全等匹配）：任意外部 URL/本地路径不在登记集合内即拒。
     if (typeof id !== 'string' || !id.trim() || id.length > 300 || /[\x00-\x1f]/.test(id)) {
       return jsonResponse(request, { ok: false, error: '只接受已登记来源 id。' }, 400)
+    }
+    const extra = Object.keys(payload).filter((k) => k !== 'id' && k !== 'force')
+    if (extra.length || (payload.force !== undefined && typeof payload.force !== 'boolean')) {
+      return jsonResponse(request, { ok: false, error: '只接受 id 与可选的 force 布尔参数，不接受链接或路径。' }, 400)
     }
     const sourceId = id.trim()
     const source = findRiceSource({ frameworkRoot: frameworkRoot(), id: sourceId })
     if (!source) {
       return jsonResponse(request, { ok: false, error: '来源 id 未登记；不接受任意链接或路径。' }, 400)
     }
-    return jsonResponse(request, { ok: true, result: checkVersion({ frameworkRoot: frameworkRoot(), id: sourceId, source }) })
+    // 注入安装核实基线：withInstall 仅读 item._install 才产出 result.install；
+    // findRiceSource 返回行不带该字段，不注入则生产链路的安装版本比较永远为空。
+    // profileDir 取宿主上下文（非硬编码/非探测），与 /sources 路由同口径。
+    const [decorated] = attachInstallToSources([source], { frameworkRoot: frameworkRoot(), profileDir: data.profileDir })
+    const result = await checkVersionAsync({ frameworkRoot: frameworkRoot(), id: sourceId, source: decorated,
+      force: payload.force === true })
+    return jsonResponse(request, { ok: true, result })
+  })
+
+  /* POST 批量自动检查远端版本（异步、并发受限、raw 去重、缓存/冷却）。
+   * 无 body 或仅 {force:boolean}；后端自行 listRiceSources 取全部已登记来源，不接受任意 URL/路径（防开放代理）。
+   * 只发只读 GET、不下载/安装/切提交；单项失败不影响其他，结果按来源 id 关联。 */
+  register(ctx, '/api/fish-body/check-versions', ['POST'], async (request) => {
+    let payload = {}
+    const raw = await request.text().catch(() => '')
+    if (raw && raw.trim()) {
+      try { payload = JSON.parse(raw) } catch {
+        return jsonResponse(request, { ok: false, error: '请求体不是有效 JSON。' }, 400)
+      }
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        return jsonResponse(request, { ok: false, error: '请求参数不合法。' }, 400)
+      }
+      const extra = Object.keys(payload).filter((k) => k !== 'force')
+      if (extra.length || (payload.force !== undefined && typeof payload.force !== 'boolean')) {
+        return jsonResponse(request, { ok: false, error: '只接受可选的 force 布尔参数，不接受链接或路径。' }, 400)
+      }
+    }
+    const root = frameworkRoot()
+    // 已登记来源白名单：后端自行枚举，前端无法注入 URL/本地路径（防开放代理）。
+    // 同样注入安装核实基线，保证批量 result.install 与单条口径一致（profileDir 取宿主上下文）。
+    const items = attachInstallToSources(listRiceSources({ frameworkRoot: root }),
+      { frameworkRoot: root, profileDir: data.profileDir })
+    const out = await checkVersionsBatch({
+      frameworkRoot: root, items, force: payload.force === true
+    })
+    // 对外结构：results 为 [{id,result}] 数组，便于前端按 id 关联；内部错误摘要已脱敏。
+    const results = Object.keys(out.results).map((id) => ({ id, result: out.results[id] }))
+    return jsonResponse(request, {
+      ok: true, results, dedupCount: out.dedupCount, checkedAt: out.checkedAt
+    })
   })
 
   /* GET 手页插件开关只读状态：pluginId 候选来自 registry，逐个交给 C 的只读核实；三者分开不伪造。 */

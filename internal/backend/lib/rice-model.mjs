@@ -5,6 +5,7 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve, relative, basename, dirname } from 'node:path'
+import { mapInstalled, repoFromDeclaration } from './install-mapping.mjs'
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'))
 const isDir = (p) => { try { return statSync(p).isDirectory() } catch { return false } }
@@ -137,11 +138,16 @@ function remoteMetadata(source, doc) {
   const owner = text(source?.owner ?? doc?.owner)
   const repo = text(source?.repository ?? source?.repo ?? doc?.repository)
   const subdir = text(source?.subdir ?? doc?.subdir)
-  const packageName = text(source?.packageName ?? doc?.packageName)
+  const packageName = text(source?.packageName ?? doc?.packageName ?? source?.packageNameFromManifest ?? doc?.packageNameFromManifest)
   const pinnedCommit = text(source?.pinnedCommit ?? doc?.pinnedCommit)
-  const versionFromManifest = text(source?.versionFromManifest ?? doc?.versionFromManifest)
+  const versionFromManifest = text(source?.versionFromManifest ?? doc?.versionFromManifest
+    ?? source?.packageJson?.version ?? doc?.packageJson?.version)
   const published = source?.published && typeof source.published === 'object' ? source.published : null
-  return { upstreamUrl: url, owner, repo, subdir, packageName, pinnedCommit, versionFromManifest, published }
+  // packageJson.repository 是包清单里声明的规范仓库（同源核对证据），并入 published 视图供 declaredRepoOf 读取。
+  const packageJsonRepo = text(source?.packageJson?.repository?.url ?? source?.packageJson?.repository
+    ?? doc?.packageJson?.repository?.url ?? doc?.packageJson?.repository)
+  return { upstreamUrl: url, owner, repo, subdir, packageName, pinnedCommit, versionFromManifest,
+    published, packageJsonRepo }
 }
 
 function normalizeItem({ id, source, doc, dir, hint, root }) {
@@ -272,9 +278,311 @@ export function findRiceSource({ frameworkRoot, id } = {}) {
   return listRiceSources({ frameworkRoot }).find((row) => row.id === id) ?? null
 }
 
-/** 对外安全的 sources 列表（剔除内部字段）。 */
+/* ---------- 饭来源归组（对外 sources 列表） ----------
+ * 关键原则（公共接口约定 v1.1 / Codex #241）：
+ *   - 包名相同 ≠ 同源。同一 packageName 只是「声明」，fork 常保留上游包名与 repository 声明。
+ *   - npm 项只有在「npm 发布包声明的规范仓库 + 实际获取的 GitHub owner/repo/subdir」能核对一致时，
+ *     才允许与对应 GitHub 项合并成一张根卡；否则单列并标 identityBasis='unconfirmed'。
+ *   - GitHub 身份优先实际来源（owner/repo/subdir），不能被包内 repository 声明拉回上游。
+ *   - groupKey 规则：有经核实的 packageName→pkg:<norm>；仅 GitHub 无包名→gh:<owner>/<repo>[#subdir]；
+ *     无法确认→solo:<原id>。不同 scope / 不同 owner fork / 同仓不同 subdir 必须不同键。
+ *   - groupName：已核实 packageName 优先，否则 displayName。sourceHistory 聚合同组成员。
+ *   - install 只在每张根卡首条带（mapInstalled 只读核实；profileDir 由宿主上下文注入，不硬编码）。
+ */
+
+/** 规范化包名：小写、去首尾空白，@scope 保留。 */
+function normPackageName(v) {
+  const s = text(v)
+  return s ? s.toLowerCase() : null
+}
+
+/** 从 npm 发布元数据里读「该发布包声明的规范仓库」。只认发布态声明，不拿本地路径硬凑。 */
+function declaredRepoOf(meta) {
+  const pub = meta?.published && typeof meta.published === 'object' ? meta.published : {}
+  // 声明仓库来源：npm 发布元数据 repository/homepage，或包清单 packageJson.repository。
+  const decl = text(pub.repository?.url ?? pub.repository ?? pub.homepage ?? meta?.packageJsonRepo) ?? null
+  const repo = decl ? repoFromDeclaration(decl) : null
+  return repo ? { ...repo, subdir: text(pub.repository?.directory ?? pub.directory) } : null
+}
+
+/** 实际 GitHub 身份：优先已落盘的 owner/repo（真实获取来源），subdir 区分同仓子包。 */
+function actualIdentityOf(meta) {
+  const owner = text(meta?.owner), repo = text(meta?.repo)
+  if (!owner || !repo) return null
+  return { owner, repo, subdir: text(meta?.subdir) }
+}
+
+function repoSame(a, b) {
+  return !!(a && b && a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase())
+}
+function subdirSame(a, b) {
+  const norm = (s) => (text(s) || '').replace(/^\/+|\/+$/g, '').toLowerCase()
+  return norm(a) === norm(b)
+}
+function encodeSubdir(s) {
+  const v = text(s)
+  return v ? '#' + encodeURIComponent(v.replace(/^\/+|\/+$/g, '')) : ''
+}
+
+/** 每条来源的身份证据（只读 _meta，不改 dev.9 的字段判定）。 */
+function identityEvidence(rows) {
+  return rows.map((row) => {
+    const meta = row._meta || {}
+    // 包名「经包清单核实」：versionFromManifest 存在或 published 存在才算核实，否则只是索引声明。
+    const rawPkg = text(meta.packageName)
+    const verifiedPkg = rawPkg && (meta.versionFromManifest || meta.published || row.sourceType === 'npm') ? normPackageName(rawPkg) : null
+    return {
+      row,
+      meta,
+      sourceType: row.sourceType,
+      pkgName: verifiedPkg,
+      actual: actualIdentityOf(meta),
+      declared: declaredRepoOf(meta),
+      localVersion: row.localVersion
+    }
+  })
+}
+
+/**
+ * 内容等价指纹：同包名 + 同一份「仓库内容摘要」（npm integrity/dist.tarball 或固定提交）。
+ * 仅能证明内容相同，不能证明这些历史里哪一条就是当前安装来源——绝不据此挑第一条。
+ */
+function contentFingerprintOf(e) {
+  const pkg = (e.pkgName || normPackageName(text(e.row?.name) || '') || '').toLowerCase()
+  if (!pkg) return null
+  const pub = e.meta?.published && typeof e.meta.published === 'object' ? e.meta.published : {}
+  const digest = text(pub.integrity) || text(pub.dist?.integrity) || text(pub.dist?.tarball) || text(e.meta?.pinnedCommit)
+  if (!digest) return null
+  return `${pkg}\u0000${digest.toLowerCase()}`
+}
+
+/**
+ * 统一「逐来源安装映射」：列表 publicSources、单条/批量版本路由 attachInstallToSources
+ * 都走这里，保证同一份材料在三条链路得到完全一致的 install 结论，杜绝卡头未确认/行已安装的分裂。
+ * 口径与原 groupSources:452-461 完全相同，不硬编码 profileDir（由 options.profileDir 注入）。
+ * sourceId 语义：只有 state==='installed' 且身份可核实才回显该来源 id（已核实关联）；
+ * unconfirmed/not-installed 一律 null，绝不把输入 id 原样回显冒充当前来源。
+ * 内容等价：同包名同摘要的多条历史若都被判 installed，仅能证明内容相同，
+ * 全部降为 unconfirmed 并在 basis 说明「内容等价、具体当前来源未确认」，不挑第一条、不并成多个当前来源。
+ */
+function resolveInstalls(evidence, options = {}) {
+  const installs = new Map()
+  for (const e of evidence) {
+    const act = e.actual
+    const raw = mapInstalled({
+      frameworkRoot: options.frameworkRoot,
+      packageName: e.pkgName || e.row.name,
+      ownerRepo: act ? { owner: act.owner, repo: act.repo } : null,
+      pinnedCommit: e.meta?.pinnedCommit || null,
+      subdir: act?.subdir || null,
+      profileDir: options.profileDir || null,
+      decisionsDirs: options.decisionsDirs,
+      sourceId: e.row.id,
+      deps: options.installDeps || {}
+    })
+    installs.set(e.row.id, { ...raw })
+  }
+  // 内容等价检测：只有被判 installed 的条目才需要辨别「多条同内容冒充多个当前来源」。
+  const byContent = new Map()
+  for (const e of evidence) {
+    const inst = installs.get(e.row.id)
+    if (!inst || inst.state !== 'installed') continue
+    const fp = contentFingerprintOf(e)
+    if (!fp) continue
+    if (!byContent.has(fp)) byContent.set(fp, [])
+    byContent.get(fp).push(e)
+  }
+  for (const group of byContent.values()) {
+    if (group.length < 2) continue
+    const ids = group.map((e) => e.row.id).join('、')
+    for (const e of group) {
+      const inst = installs.get(e.row.id)
+      installs.set(e.row.id, {
+        ...inst,
+        state: 'unconfirmed',
+        source: 'unknown',
+        sourceId: null,
+        basis: `${inst.basis || ''}；同组 ${group.length} 条历史内容等价（相同仓库摘要/固定提交：${ids}），仅凭内容相同不能证明其中某一条就是当前安装来源，具体当前来源未确认，也未挑选为首条。`
+      })
+    }
+  }
+  // sourceId 收口：只有已核实 installed 才带来源 id，其余一律 null（不回显输入）。
+  for (const [id, inst] of installs) {
+    if (inst.state !== 'installed' && inst.sourceId != null) installs.set(id, { ...inst, sourceId: null })
+  }
+  return installs
+}
+
+/** 归组：返回每条来源带 groupKey/groupName/identityBasis/sourceHistory/install 的对外项。 */
+function groupSources(options) {
+  const rows = listRiceSources(options)
+  const evidence = identityEvidence(rows)
+  // 缺陷1：逐来源安装映射统一在 resolveInstalls 完成，列表每条都带 install，
+  // 与单条/批量版本路由同判据，避免「卡头未确认、npm 行已安装」的分裂结论。
+  const installs = resolveInstalls(evidence, options)
+  const byActual = new Map() // owner/repo -> 证据集合（GitHub 实际来源）
+  for (const e of evidence) {
+    if (!e.actual || e.sourceType !== 'github') continue
+    const key = `${e.actual.owner.toLowerCase()}/${e.actual.repo.toLowerCase()}`
+    if (!byActual.has(key)) byActual.set(key, [])
+    byActual.get(key).push(e)
+  }
+
+  // 预处理：每个核实包名对应的「实际 GitHub 身份」集合。>1 说明同名却来自不同实际仓库/子目录，
+  // 此时禁止用 pkg 键把这些项并到一起（防 fork 与同仓兄弟子包误并）。
+  const actualsByPkg = new Map()
+  for (const e of evidence) {
+    if (!e.pkgName || !e.actual || e.sourceType !== 'github') continue
+    if (!actualsByPkg.has(e.pkgName)) actualsByPkg.set(e.pkgName, new Set())
+    actualsByPkg.get(e.pkgName).add(
+      `${e.actual.owner.toLowerCase()}/${e.actual.repo.toLowerCase()}${encodeSubdir(e.actual.subdir)}`)
+  }
+  const ambiguousPkg = new Set(
+    [...actualsByPkg.entries()].filter(([, set]) => set.size > 1).map(([pkg]) => pkg))
+
+  // 缺陷4：纯 npm 历史材料（无实际 GitHub 身份）凭「同核实包名 + 同声明规范仓库（owner/repo/subdir 一致）」
+  // 互证同源。只有满足全部条件的 ≥2 条才归一成 pkg 组；fork（actual 与 declared 冲突）、
+  // ambiguousPkg（同名多实际身份）、declared 缺失或互相冲突的项都不进这个互证集合，仍各自 solo:unconfirmed。
+  const npmClaimKey = (e) => `${e.pkgName}\u0000${e.declared.owner.toLowerCase()}/${e.declared.repo.toLowerCase()}\u0000${(e.declared.subdir || '').toLowerCase()}`
+  const npmClaimGroups = new Map()
+  for (const e of evidence) {
+    if (e.sourceType !== 'npm' || !e.pkgName || !e.declared || e.actual) continue
+    if (ambiguousPkg.has(e.pkgName)) continue
+    const key = npmClaimKey(e)
+    if (!npmClaimGroups.has(key)) npmClaimGroups.set(key, [])
+    npmClaimGroups.get(key).push(e)
+  }
+
+  // 缺陷4：同名 npm 若声明了多个不同规范仓库（如 acme/one 与 acme/two），它们互相冲突，
+  // 绝不能共用一个 pkg:${pkgName} 键把四条款目并成一组。只有声明仓库唯一的包才用裸 pkg 键
+  // （保护 dev.9/dev.10 正例：同源历史归一）；冲突包按声明仓库分键。
+  const npmDeclaredByPkg = new Map()
+  for (const e of evidence) {
+    if (e.sourceType !== 'npm' || !e.pkgName || !e.declared) continue
+    if (!npmDeclaredByPkg.has(e.pkgName)) npmDeclaredByPkg.set(e.pkgName, new Set())
+    npmDeclaredByPkg.get(e.pkgName).add(
+      `${e.declared.owner.toLowerCase()}/${e.declared.repo.toLowerCase()}${encodeSubdir(e.declared.subdir)}`)
+  }
+  const npmConflictPkg = new Set(
+    [...npmDeclaredByPkg.entries()].filter(([, set]) => set.size > 1).map(([pkg]) => pkg))
+  const npmPkgKey = (e) => {
+    const base = `pkg:${e.pkgName}`
+    if (!npmConflictPkg.has(e.pkgName) || !e.declared) return base
+    return `${base}@${e.declared.owner.toLowerCase()}/${e.declared.repo.toLowerCase()}${encodeSubdir(e.declared.subdir)}`
+  }
+
+  const ghKeyOf = (actual) => `gh:${actual.owner.toLowerCase()}/${actual.repo.toLowerCase()}${encodeSubdir(actual.subdir)}`
+
+  // 每张根卡的判定：groupKey / groupName / identityBasis。
+  const decision = evidence.map((e) => {
+    // ① fork 自证最优先：GitHub 实际来源与包内声明仓库指向不同 owner/repo ——
+    //    以实际来源单列，绝不因包内 repository 仍指上游被并回上游 pkg 组。
+    if (e.actual && e.sourceType === 'github' && e.declared && !repoSame(e.actual, e.declared)) {
+      return { ...e, groupKey: ghKeyOf(e.actual), identityBasis: 'unconfirmed' }
+    }
+    // ② npm 项用「声明仓库」与实际 GitHub 材料核对同源；核对通过才允许并入 pkg 组。
+    if (e.sourceType === 'npm') {
+      let matched = null
+      if (e.declared && e.pkgName && !ambiguousPkg.has(e.pkgName)) {
+        const key = `${e.declared.owner.toLowerCase()}/${e.declared.repo.toLowerCase()}`
+        const candidates = byActual.get(key) || []
+        matched = candidates.find((g) => subdirSame(e.declared.subdir, g.actual.subdir)) || null
+      }
+      if (matched && e.pkgName) return { ...e, groupKey: npmPkgKey(e), identityBasis: 'package-manifest' }
+      // 缺陷4：无实际 GitHub 身份的多条 npm，声明同一规范仓库且包名一致 → 互证归一成 pkg 组。
+      // 仅在互证集合 ≥2 条时生效（避免单条样本凭自身声明自我确认）；fork/ambiguous/声明冲突已在建集合时排除。
+      // npmPkgKey 对声明仓库冲突的包追加 owner/repo 后缀，避免 acme/one 与 acme/two 被并成同一键。
+      if (e.declared && e.pkgName && !e.actual && !ambiguousPkg.has(e.pkgName)) {
+        const mates = npmClaimGroups.get(npmClaimKey(e)) || []
+        if (mates.length >= 2) return { ...e, groupKey: npmPkgKey(e), identityBasis: 'package-manifest' }
+      }
+      // 声明仓库缺失/冲突/对不上实际材料 —— 单列标来源关联未确认，不按包名吸入别人的根卡。
+      return { ...e, groupKey: `solo:${e.row.id}`, identityBasis: 'unconfirmed' }
+    }
+    // ③ GitHub 实际来源：有核实包名且包名未被多实际身份污染 → pkg 键；否则实际身份键。
+    if (e.actual && e.sourceType === 'github') {
+      if (e.pkgName && !ambiguousPkg.has(e.pkgName)) {
+        return { ...e, groupKey: `pkg:${e.pkgName}`, identityBasis: 'package-manifest' }
+      }
+      return { ...e, groupKey: ghKeyOf(e.actual), identityBasis: 'owner-repo' }
+    }
+    // ④ 有包名但无 GitHub 实际身份的来源（如纯本地带 packageName）：单列并标未确认，
+    //    不凭包名把它和远端根卡合并。
+    return { ...e, groupKey: `solo:${e.row.id}`, identityBasis: 'unconfirmed' }
+  })
+
+  // 按 groupKey 聚合 sourceHistory；install 只挂每张卡首条。
+  const order = []
+  const buckets = new Map()
+  for (const d of decision) {
+    if (!buckets.has(d.groupKey)) { buckets.set(d.groupKey, []); order.push(d.groupKey) }
+    buckets.get(d.groupKey).push(d)
+  }
+  const result = []
+  for (const key of order) {
+    const group = buckets.get(key)
+    // 根卡首条优先取有 GitHub 实际身份者，便于 install 关联 owner/repo。
+    const headIdx = Math.max(0, group.findIndex((d) => d.actual))
+    const name = group.find((d) => d.pkgName)?.pkgName || group[headIdx].row.name
+    for (let i = 0; i < group.length; i++) {
+      const d = group[i]
+      const { _meta, ...item } = d.row
+      const sourceHistory = group.map((g) => {
+        const h = { id: g.row.id, localVersion: g.row.localVersion ?? null, sourceKind: g.sourceType }
+        if (g.meta?.sourceStatus) h.checkedHint = g.meta.sourceStatus
+        return h
+      })
+      const out = {
+        ...item,
+        groupKey: key,
+        groupName: name,
+        identityBasis: d.identityBasis,
+        sourceHistory
+      }
+      // 每条来源都带统一映射结论：列表与单条/批量版本路由逐条一致；
+      // 卡级结论由前端按 install.state/sourceId 自行聚合，后端不再只挑首条冒充整卡安装来源。
+      out.install = installs.get(d.row.id) ?? null
+      result.push(out)
+    }
+  }
+  return result
+}
+
+/** 对外安全的 sources 列表（剔除内部字段，带归组字段）。 */
 export function publicSources(options) {
-  return listRiceSources(options).map(({ _meta, ...item }) => item)
+  return groupSources(options || {})
+}
+
+/**
+ * 给「版本检查链路」的来源项附加安装核实基线 _install={sourceId,state,version}。
+ * 供 index.js 的 /check-version 与 /check-versions 路由在调用 checkVersionAsync/checkVersionsBatch
+ * 之前注入：withInstall 读 item._install 才产出 result.install，而 findRiceSource/listRiceSources
+ * 返回的行本身不带该字段——不注入则生产链路的 result.install 永远为空。
+ * 身份提取复用 identityEvidence，mapInstalled 入参与 groupSources 完全同口径，逐条核实（不只组头），
+ * 不硬编码 profileDir：由宿主经 options.profileDir 注入（与 /sources 路由一致）。
+ */
+export function attachInstallToSources(rows, options = {}) {
+  const list = Array.isArray(rows) ? rows : []
+  // 缺陷1b：install 判定必须基于「全量来源集合」，不能只看本次传入的子集。
+  // 否则单条入口([one])看不到同内容的另一条(two)，内容等价检测组长度=1不降级→installed，
+  // 而列表/批量入口看到两条→降级 unconfirmed，同一来源三入口结论分裂。
+  // 用 frameworkRoot 取回全量再按请求行 id 挑回；隔离测试手填、全量覆盖不到的行才回退到传入集合。
+  let basisRows = list
+  if (options.frameworkRoot) {
+    const all = listRiceSources({ frameworkRoot: options.frameworkRoot })
+    const wanted = new Set(list.map((r) => r && r.id).filter(Boolean))
+    if (all.some((r) => wanted.has(r.id))) basisRows = all
+  }
+  // 与 publicSources 列表共用 resolveInstalls 的逐来源映射，三条链路同一结论。
+  const installs = resolveInstalls(identityEvidence(basisRows), options)
+  return list.map((row) => {
+    const install = installs.get(row.id) ?? null
+    return { ...row, _install: {
+      sourceId: install?.sourceId ?? null,
+      state: install?.state ?? 'unconfirmed',
+      version: install?.version ?? null
+    } }
+  })
 }
 
 /**

@@ -1,5 +1,29 @@
 # fish-body（鱼的身体）
 
+## Codex dev.14 五次复核 URL 大小写定向补修定版（0.0.7-dev.15，分支测试版）
+
+> dev.15 只修 Codex 第五次复核退回的一处：`resolutionIdentity` 旧实现对整条远端 URL `.toLowerCase()` 把大小写敏感 pathname（DEMO.tgz vs demo.tgz）归一导致同名误认；改用标准 `new URL()`，protocol/host 标准归一、pathname/search/hash 保留大小写，file 走 pathIdentity、其余类别不一律小写。Codex URL 探针 2 条转绿、正例与 dev14 全部反例不回归、全套 103/103、真机 context/meme 仍 installed。界面/接线/其余证据沿用 dev.14 不重做。详见 CHANGELOG dev.15 段。
+
+## Codex dev.13 四次复核路径身份 4 缺陷返修定版（0.0.7-dev.14，分支测试版）
+
+> dev.14 逐条修 Codex 对 dev.13 四次复核退回的 4 类路径身份缺陷：删掉把 URL/file 引用截成文件名的 `normalizeResolution`，改用 `resolutionIdentity` 保留完整身份（URL 保 host+全路径、file 按基目录解析规范路径、带类别前缀）；registry 三源 spec 交叉核要求完整引用全等且当前声明存在；`targetProfileMatches` 走 `samePath` 完整路径不再 basename 通配；当前 package.json 无依赖声明时仅残留不放行 installed。同名不同引用/制品/目录/无声明四例全降未确认，正例与真机两包继续 installed。验收 Codex 路径身份探针 4 条转绿 + 正例护栏、全套 97/97、dev12/dev11/dev9 反例不回退、独立 U 88/88 + H 41/41 + E 九场景逐张看图、快照 SHA 三方 7 文件一致、生产真缺陷 0。远端版本仍 mock 未联网真查。详见 CHANGELOG dev.14 段。
+
+## Codex dev.12 三次复核 3 类缺陷返修定版（0.0.7-dev.13，分支测试版）
+
+> dev.13 逐条修 Codex 对 dev.12 三次复核退回的 3 类真实缺陷：安装映射消费真实鱼手 registry + 正式决定 + 请求三源交叉核（来源 id 尾段与 requestId 精确关联、多条同内容历史只认当前那条、不挑首条），单条/列表/批量三入口基于全量集合统一；lock 只认当前 root importer 沿直接依赖 resolution 精确匹配、subdir 无证据即未确认（保留有效正例）；远端真取数成功推进 lastSuccessAt、缓存复用不刷新。验收 U 78/78 + H 36/36 + E 九场景逐张看图、真机两包 installed/sourceId 精确关联、Codex 契约探针 5 条转绿、全套 92/92、dev.9 五反例不回退、生产真缺陷 0。远端版本仍 mock 未联网真查。详见 CHANGELOG dev.13 段。
+
+## Codex dev.11 二次复核 5 条缺陷返修定版（0.0.7-dev.12，分支测试版）
+
+> dev.12 逐条修 Codex 对 dev.11 二次复核退回的 5 条真实缺陷：同一安装事实四处统一（resolveInstalls 逐来源映射、sourceId 仅 installed 回显、内容等价多条全降未确认）、pnpm lock 只认当前直接依赖+完整身份核、前端当前来源证据优先精确匹配（market UUID 收技术详情、无据不写「最新记录」）、npm 声明仓库冲突分组键、缓存复用不刷新原始取数时间。保留异步/接线/force/冷却/去重。验收 U 64/64 + H 30/30 + E 九场景逐张看图、生产真缺陷 0、Codex 追加反例 3 条转绿、dev.9 五反例不回退。远端版本仍 mock 未联网真查。详见 CHANGELOG dev.12 段。
+
+## 分组与自动查版本返修收口（0.0.7-dev.11，分支测试版）
+
+> dev.11 收口 Codex 对 dev.10 的 6 点复核退回 + 生产 `result.install` 链路缺口：纯 npm 同包同声明仓库历史归一成一张卡、前端按渠道分层折叠历史；安装映射按 pnpm lockfile v6/v9 真结构精确核实、同版本不冒认；安装比较按安装版真算（材料/安装两比较对象分开），`force` 绕过缓存与冷却、失败保留 historical、跨批去重、全链路异步不阻塞宿主；生产 `check-version(s)` 注入 `_install` 基线使 `result.install` 真实填充。验收 U 56/56 + H 25/25 + E 九场景、真链路快照硬断言 dsh-context 0.83.1、fork/冲突/同版三误并正反例真抓到、生产真缺陷 0。远端版本仍为 mock 未联网真查。详见 CHANGELOG dev.11 段。
+
+## 饭·来源按插件归组 + 自动查版本（0.0.7-dev.10，分支测试版）
+
+> dev.10 把饭·来源页改为一个插件一张卡：按经核实的 packageName / 实际 owner/repo（/subdir）归并，来源在卡内分层、历史 market 材料折叠、id/哈希/路径进技术详情。安装来源/版本按当前 Profile 的 lock/安装决定精确映射，证据不足标「未确认」。防误并（#241）：fork 按实际 owner 独立、npm 关联缺失/冲突单列未确认、同版本仅 lock 命中那条显安装。进饭页自动查远端版本元数据（不下载/不安装）：本地卡先出、按 repo 去重、结果按 id 隔离、成功缓存 1h/失败冷却 5min/可手动强制重查、已安装比较与材料比较分开、失败/403/不可比保留 unknown 不谎报。`POST /check-versions` 后端白名单防开放代理。五页其余 UI 与启停沿用 dev.9。
+
 ## 来源读取复核收口（0.0.7-dev.9，分支测试版）
 
 > dev.9 收口 dev.8 来源读取补修的复核意见：`classifyType` 不再把 `local-git-fixture`（带真实 GitHub upstream）误判为本地材料；`projectSource` 强化关联确认（空对象/缺 `localRepositoryPath` 拒绝、`versions` 只读固定提交）；来源 id 分离 `#subdir`、按 `sourceMaterialName` 核对 monorepo 子包防串包。真实饭目录 GitHub 材料 `hasRemote` 19 项、本地材料 6 项，dsh-context 归回 GitHub。五页 UI 与启停/状态透传沿用 dev.7。用户反馈的「GitHub 无法检查 / npm 能查版本」经实测为无代理时 `api.github.com` 限流的网络差异 + 本会话临时状态，非版本检查缺陷。

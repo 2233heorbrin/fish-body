@@ -326,6 +326,24 @@ function installDataClient(React, ctx, component) {
 .fb-diag-list li strong{font-size:13.5px}
 .fb-diag-list pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:6px 0 0}
 .fb-copy-ok{margin-left:8px;color:var(--fb-ok);font-size:12px}
+.fb-rice-progress{margin:12px 0;padding:10px 14px;border:1px solid var(--fb-border1);border-radius:var(--fb-radius);background:var(--fb-bg2);color:var(--fb-label2);font-size:12.5px}
+.fb-rice-card{margin:0 0 14px;padding:14px 16px;border:1px solid var(--fb-border1);border-radius:var(--fb-radius);background:#fff}
+.fb-rice-card:last-child{margin-bottom:0}
+.fb-rice-card-h{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.fb-rice-card-h h4{margin:0;font-size:15px;font-weight:600;overflow-wrap:anywhere}
+.fb-rice-desc{margin:6px 0 10px;color:var(--fb-label2);font-size:12.5px;line-height:1.7}
+.fb-rice-channel{margin-top:12px;padding-top:10px;border-top:1px solid var(--fb-border1)}
+.fb-rice-channel h5{margin:0 0 6px;font-size:13px;font-weight:600}
+.fb-rice-channel .fb-source-row{padding-top:6px}
+.fb-source-row{padding:10px 0;border-top:1px solid var(--fb-border1)}
+.fb-source-row:first-child{border-top:0}
+.fb-source-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.fb-source-title{font-size:13.5px;font-weight:600;overflow-wrap:anywhere}
+.fb-source-meta{margin:4px 0 0;color:var(--fb-label2);font-size:12.5px;line-height:1.7}
+.fb-source-detail{margin-top:8px}
+.fb-history{margin-top:10px}
+.fb-history summary{cursor:pointer;font-size:12.5px;font-weight:600}
+.fb-history .fb-source-row{margin-top:8px}
 @media(max-width:760px){.fb-listwrap{display:block}.fb-mlist{flex:auto;width:100%;margin-bottom:12px}.fb-comp-grid{grid-template-columns:1fr;gap:6px}.fb-mode-grid{grid-template-columns:1fr}.fb-kv{grid-template-columns:88px minmax(0,1fr)}}
 @media(max-width:480px){.fb-nav{padding:9px 10px}.fb-lead,.fb-item,.fb-detail,.fb-grp,.fb-tech{padding-left:12px;padding-right:12px}.fb-detail-grid{grid-template-columns:1fr}.fb-actions,.fb-data-actions{gap:6px}.fb-foot{font-size:12px}}
 `
@@ -761,38 +779,117 @@ function installDataClient(React, ctx, component) {
         h(Foot, null, '鱼的脑是独立设置项，不并入身体页面。 · 本页为只读概览，不打开文件夹、不启动分析、不检查版本；能力标记不代表真实安装或运行。'))
     }
 
+    /* 同会话版本检查缓存：切页重入不重复打网络；成功 1h，失败 5min 冷却。 */
+    const riceAutoCache = new Map()
+    const RICE_AUTO_TTL = 60 * 60 * 1000
+    const RICE_FAIL_COOLDOWN = 5 * 60 * 1000
+
     function RicePanel({ onNavigate, sectionPath }) {
       const [items, setItems] = useState(null)
-      const [selected, setSelected] = useState(null)
       const [issue, setIssue] = useState('')
       const [checks, setChecks] = useState({})
       const [retryKey, setRetryKey] = useState(0)
       const [pendingOpen, setPendingOpen] = useState(false)
       const [openIssue, setOpenIssue] = useState('')
+      const [expanded, setExpanded] = useState({})
+      const [auto, setAuto] = useState({ phase: 'idle', message: '', checkedAt: null, dedupCount: null })
       const liveRef = useRef(true)
-      useEffect(() => { liveRef.current = true; return () => { liveRef.current = false } }, [retryKey])
+      const autoStartedRef = useRef(false)
+      useEffect(() => { liveRef.current = true; autoStartedRef.current = false; return () => { liveRef.current = false } }, [retryKey])
       useEffect(() => {
         let cancelled = false
-        setIssue(''); setItems(null)
+        setIssue(''); setItems(null); setChecks({}); setExpanded({}); setAuto({ phase: 'idle', message: '', checkedAt: null, dedupCount: null })
         fetchJson('/api/fish-body/sources')
           .then(value => { if (!cancelled && liveRef.current) setItems(Array.isArray(value?.items) ? value.items : []) })
           .catch(error => { if (!cancelled && liveRef.current) setIssue(error.message) })
         return () => { cancelled = true }
       }, [retryKey])
+
+      const compareText = { newer: '有新版', same: '已是最新', localNewer: '本地较新', unknown: '版本关系未确认' }
+      const sourceLabel = type => ({ github: 'GitHub 仓库', local: '本地材料', remote: '远端仓库', npm: 'npm 包' }[String(type || '').toLowerCase()] || '来源材料')
+      const sourceTone = type => ({ github: 'info', npm: 'info', local: '', remote: '' }[String(type || '').toLowerCase()] || '')
+      const isFailedResult = r => !r || ['error', 'unavailable', 'incomparable', 'historical'].includes(r.state)
+      const rememberResult = (id, result) => {
+        const failed = isFailedResult(result)
+        riceAutoCache.set(id, { result, failed, checkedAt: Date.now(), failedAt: failed ? Date.now() : null })
+      }
+      const applyResults = (results, message, checkedAt, dedupCount) => {
+        const rows = Array.isArray(results) ? results : []
+        if (!liveRef.current) return
+        if (rows.length) {
+          const patch = {}
+          for (const row of rows) {
+            if (!row || !row.id) continue
+            patch[row.id] = { pending: false, result: row.result || null, error: '' }
+            rememberResult(row.id, row.result || null)
+          }
+          setChecks(old => ({ ...old, ...patch }))
+        }
+        setAuto({ phase: 'done', message: message || '', checkedAt: checkedAt || new Date().toISOString(), dedupCount: typeof dedupCount === 'number' ? dedupCount : null })
+      }
+      const runBatch = async force => {
+        setAuto({ phase: 'checking', message: force ? '正在重新检查远端版本…' : '正在检查远端版本…', checkedAt: null, dedupCount: null })
+        try {
+          const value = await fetchJson('/api/fish-body/check-versions', {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(force ? { force: true } : {})
+          })
+          applyResults(value?.results, value?.dedupCount ? '远端共用 ' + value.dedupCount + ' 次查询；结果按来源分别归档。' : '', value?.checkedAt, value?.dedupCount)
+        } catch (error) {
+          if (!liveRef.current) return
+          setAuto({ phase: 'error', message: '自动版本检查暂不可用：' + error.message, checkedAt: null, dedupCount: null })
+        }
+      }
       useEffect(() => {
-        if (!items || (selected && items.some(i => i.id === selected))) return
-        setSelected(items.length ? items[0].id : null)
-      }, [items, selected])
-      const check = async id => {
+        if (!items || !items.length || autoStartedRef.current) return
+        autoStartedRef.current = true
+        const now = Date.now()
+        const restored = {}
+        let needBatch = false
+        let newest = null
+        for (const x of items) {
+          if (!x.hasRemote) continue
+          const cached = riceAutoCache.get(x.id)
+          if (!cached) { needBatch = true; continue }
+          if (cached.failed && now - (cached.failedAt || 0) < RICE_FAIL_COOLDOWN) { restored[x.id] = cached.result; continue }
+          if (!cached.failed && now - (cached.checkedAt || 0) < RICE_AUTO_TTL) { restored[x.id] = cached.result; continue }
+          needBatch = true
+        }
+        if (Object.keys(restored).length) {
+          const patch = {}
+          for (const id of Object.keys(restored)) patch[id] = { pending: false, result: restored[id], error: '' }
+          setChecks(old => ({ ...old, ...patch }))
+          if (cachedNewest(items, riceAutoCache)) newest = cachedNewest(items, riceAutoCache)
+        }
+        if (!needBatch) {
+          setAuto({ phase: 'done', message: '本次会话已检查，使用会话缓存；失败项仍在冷却期。', checkedAt: newest, dedupCount: null })
+          return
+        }
+        runBatch(false)
+      }, [items])
+
+      function cachedNewest(rows, cache) {
+        const times = rows.map(x => cache.get(x.id)?.checkedAt).filter(Boolean)
+        return times.length ? new Date(Math.max(...times)).toISOString() : null
+      }
+
+      const check = async (id, force) => {
         if (checks[id]?.pending) return
         setChecks(old => ({ ...old, [id]: { ...(old[id] || {}), pending: true, error: '' } }))
         try {
           const value = await fetchJson('/api/fish-body/check-version', {
-            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id })
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(force ? { id, force: true } : { id })
           })
-          if (liveRef.current) setChecks(old => ({ ...old, [id]: { pending: false, result: value?.result || null, error: '' } }))
+          const result = value?.result || null
+          if (liveRef.current) {
+            setChecks(old => ({ ...old, [id]: { pending: false, result: result || old[id]?.result || null, error: result ? '' : '版本结论尚未返回，保留上次结果。' } }))
+            rememberResult(id, result || { state: 'error', error: '版本结论尚未返回' })
+          }
         } catch (error) {
-          if (liveRef.current) setChecks(old => ({ ...old, [id]: { pending: false, result: null, error: error.message } }))
+          const failed = { state: 'error', error: error.message }
+          if (liveRef.current) {
+            setChecks(old => ({ ...old, [id]: { pending: false, result: old[id]?.result || null, error: error.message } }))
+            rememberResult(id, failed)
+          }
         }
       }
       const open = async () => {
@@ -806,8 +903,7 @@ function installDataClient(React, ctx, component) {
         } catch (error) { if (liveRef.current) setOpenIssue(error.message) }
         finally { if (liveRef.current) setPendingOpen(false) }
       }
-      const compareText = { newer: '有新版', same: '已是最新', localNewer: '本地较新', unknown: '版本关系未确认' }
-      const sourceLabel = type => ({ github: 'GitHub 仓库', local: '本地材料', remote: '远端仓库', npm: 'npm 包' }[String(type || '').toLowerCase()] || '来源材料')
+
       /* 真实 sources 里 name 常统一为「仓库」：用 id/path 提取 owner/repo、包名或 local/xxx。 */
       const baseName = x => {
         const id = String(x.id || '').trim()
@@ -824,11 +920,35 @@ function installDataClient(React, ctx, component) {
       const nameCounts = {}
       for (const x of (items || [])) { const n = baseName(x); nameCounts[n] = (nameCounts[n] || 0) + 1 }
       const displayName = x => {
-        const n = baseName(x)
-        if ((nameCounts[n] || 0) < 2) return n
         const id = String(x.id || '')
-        const short = id.includes('/') ? id.split('/').slice(-2).join('/') : id.slice(0, 10)
-        return n + ' · ' + sourceLabel(x.sourceType) + ' · ' + short
+        const base = baseName(x)
+        const n = base.replace(/market-[0-9a-f]{8}-[0-9a-f-]+/gi, '市场记录')
+        if (id.startsWith('npm:')) {
+          const rest = id.slice(4)
+          const pkg = packageNameOf(x) || rest.split('/')[0] || n.split('/')[0] || '未命名来源'
+          return /market-/i.test(rest) ? pkg + ' · npm 市场记录' : pkg + ' · npm 包'
+        }
+        if ((nameCounts[base] || 0) < 2) return n
+        return n + ' · ' + sourceLabel(x.sourceType)
+      }
+      const packageNameOf = x => String(x.packageNameFromManifest || x.packageName || x.package || '').trim()
+      const deriveGroupKey = x => {
+        if (x.groupKey) return String(x.groupKey)
+        const pkg = packageNameOf(x).toLowerCase()
+        if (pkg) return 'pkg:' + pkg
+        const m = String(x.id || '').match(/^github\.com\/([^/]+)\/([^/#]+)(?:#(.+))?$/i)
+        if (m) return 'gh:' + m[1] + '/' + m[2] + (m[3] ? '#' + encodeURIComponent(m[3]) : '')
+        return 'solo:' + String(x.id || '')
+      }
+      const groups = []
+      const indexByKey = new Map()
+      for (const x of (items || [])) {
+        const key = deriveGroupKey(x)
+        if (!indexByKey.has(key)) {
+          indexByKey.set(key, groups.length)
+          groups.push({ key, rows: [] })
+        }
+        groups[indexByKey.get(key)].rows.push(x)
       }
       const checkTag = id => {
         const c = checks[id]
@@ -842,7 +962,18 @@ function installDataClient(React, ctx, component) {
         if (cmp === 'local-newer') return h(Tag, { tone: 'info' }, '本地较新')
         return h(Tag, { tone: 'warn' }, '版本未确认')
       }
-      function renderCheck(item) {
+      const installTag = install => {
+        if (!install) return null
+        if (install.state === 'installed') {
+          const v = install.version || install.installedVersion || '版本未记录'
+          const src = install.source || installedChannel(install) || ''
+          return h(Tag, { tone: 'ok' }, '当前安装 ' + v + (src ? ' · ' + src : ''))
+        }
+        if (install.state === 'unconfirmed') return h(Tag, { tone: 'warn' }, '当前安装来源未确认')
+        if (install.state === 'not-installed') return h(Tag, { tone: 'info' }, '未安装')
+        return h(Tag, { tone: 'info' }, '安装状态未确认')
+      }
+      function renderCheck(item, compareTarget) {
         const c = checks[item.id]
         if (!c) return null
         if (c.pending) return h('p', { className: 'fb-note', role: 'status' }, '正在检查远端版本…')
@@ -851,8 +982,8 @@ function installDataClient(React, ctx, component) {
           h('p', null, '本次检查未完成；本地材料仍可用，只是「现在是否最新」尚未确认。'),
           h(KV, { rows: [['本地版本', item.localVersion || '未记录'], ['错误说明', c.error]] }),
           h('div', { className: 'fb-actions' },
-            h('button', { type: 'button', className: 'fb-tab fb-primary', onClick: () => check(item.id) }, '重新检查'),
-            h('details', { className: 'fb-tech' }, h('summary', null, '查看错误详情'), h('pre', { className: 'fb-task-output' }, c.error))))
+            h('button', { type: 'button', className: 'fb-tab fb-primary', onClick: () => check(item.id, true) }, '重新检查'),
+            h(Tech, { title: '查看错误详情' }, h('pre', { className: 'fb-task-output' }, c.error))))
         const r = c.result
         if (!r) return h('p', { className: 'fb-note' }, '本次检查没有返回结果。')
         const failed = r.state === 'historical' || r.state === 'error' || r.state === 'unavailable' || r.state === 'incomparable'
@@ -867,18 +998,20 @@ function installDataClient(React, ctx, component) {
           ] }),
           h('p', { className: 'fb-note' }, '上面的远端版本不是本次结论；本次未确认，也不推断存在新版本。'),
           h('div', { className: 'fb-actions' },
-            h('button', { type: 'button', className: 'fb-tab fb-primary', onClick: () => check(item.id) }, '重新检查'),
-            h('details', { className: 'fb-tech' }, h('summary', null, '查看错误详情'), h('pre', { className: 'fb-task-output' }, JSON.stringify(r, null, 2)))))
+            h('button', { type: 'button', className: 'fb-tab fb-primary', onClick: () => check(item.id, true) }, '重新检查'),
+            h(Tech, { title: '查看错误详情' }, h('pre', { className: 'fb-task-output' }, JSON.stringify(r, null, 2)))))
         const cmp = r.comparison || 'unknown'
+        const target = compareTarget || '保存材料'
         if (cmp === 'newer') {
           const updateUrl = item.remoteUrl || item.url || r.remoteUrl || r.url || ''
           return h('div', { className: 'fb-verbox' },
-            h('p', { className: 'fb-et' }, '发现新版本 · 可查看更新说明'),
+            h('p', { className: 'fb-et' }, '发现新版本 · 与' + target + '比较'),
             h(KV, { rows: [
               ['本地版本', r.localVersion || item.localVersion || '未记录'],
               ['远端版本', r.remoteVersion || '未记录'],
-              ['上次检查', r.checkedAt || '未记录']
+              ['检查时间', r.checkedAt || '未记录']
             ] }),
+            h('p', { className: 'fb-note' }, '只表示该来源有新版本，不代表已安装版可无缝切换；版本结论只读取后端比较。'),
             h('div', { className: 'fb-actions' }, updateUrl
               ? h('a', { className: 'fb-tab', href: updateUrl, target: '_blank', rel: 'noreferrer' }, '查看更新说明')
               : h('button', { type: 'button', className: 'fb-tab', disabled: true, title: '后端未提供可打开的更新说明链接' }, '查看更新说明（无可打开链接）')))
@@ -888,54 +1021,179 @@ function installDataClient(React, ctx, component) {
           h(KV, { rows: [
             ['本地版本', r.localVersion || item.localVersion || '未记录'],
             ['远端版本', r.remoteVersion || '未记录'],
-            ['上次检查', r.checkedAt || '未记录']
+            ['检查时间', r.checkedAt || '未记录']
           ] }),
           h('p', { className: 'fb-note' }, '版本比较只读取后端结论，前端不做字符串比较。'))
       }
-      const item = items && items.length ? items.find(x => x.id === selected) || items[0] : null
+      const sourceRow = (x, compareTarget) => {
+        const openDetail = !!expanded[x.id]
+        const pending = x.hasRemote && (auto.phase === 'checking' || !!checks[x.id]?.pending)
+        const savedAt = x.fetchedAt || x.checkedAt || x.savedAt || x.updatedAt || ''
+        return h('div', { key: x.id, className: 'fb-source-row' },
+          h('div', { className: 'fb-source-head' },
+            h('span', { className: 'fb-source-title' }, displayName(x)),
+            h(Tag, { tone: sourceTone(x.sourceType) }, sourceLabel(x.sourceType)),
+            x.localVersion ? h(Tag, { tone: 'info' }, '本地 ' + x.localVersion) : null,
+            checks[x.id]?.result?.install?.state === 'installed' && checks[x.id].result.install.installedVersion
+              ? h(Tag, { tone: 'info' }, '安装版 ' + checks[x.id].result.install.installedVersion) : null,
+            checkTag(x.id)),
+          h('p', { className: 'fb-source-meta' }, pending ? '正在检查远端版本…' :
+            (savedAt ? '已有可读时间：' + String(savedAt) + '；' : '') +
+            (x.hasRemote ? '远端来源已登记，版本结论以后端检查为准；未检查时不推断是否最新。' : '本地材料，无远端来源，不标「已是最新」。')),
+          h('div', { className: 'fb-actions' },
+            h('button', { type: 'button', className: 'fb-tab', 'aria-expanded': openDetail ? 'true' : 'false', onClick: () => setExpanded(old => ({ ...old, [x.id]: !old[x.id] })) }, openDetail ? '收起来源' : '查看来源'),
+            x.hasRemote ? h('button', { type: 'button', className: 'fb-tab', disabled: !!checks[x.id]?.pending, onClick: () => check(x.id, true) }, checks[x.id]?.pending ? '正在检查…' : '重新检查') : null),
+          openDetail ? h('div', { className: 'fb-source-detail' },
+            h(KV, { rows: [
+              ['来源类型', sourceLabel(x.sourceType) + '（' + (x.sourceType || '未标注') + '）'],
+              ['本地版本', x.localVersion || '未记录'],
+              ['远端来源', x.hasRemote ? '已登记' : '无'],
+              ['身份依据', String(x.identityBasis || (deriveGroupKey(x).startsWith('solo:') ? 'unconfirmed' : '未记录'))]
+            ] }),
+            checks[x.id]?.result?.install?.state === 'installed' && ['newer', 'same', 'local-newer'].includes(checks[x.id].result.install.comparison)
+              ? h('p', { className: 'fb-note' }, '安装比较：' + (installCompareText[checks[x.id].result.install.comparison] || '版本关系未确认') + '（安装版本 ' + (checks[x.id].result.install.installedVersion || '未记录') + '，与远端版本比较）。')
+              : null,
+            renderCheck(x, compareTarget),
+            h(Tech, { title: '技术详情（来源编号与目录）' },
+              h(KV, { rows: [['来源编号', x.id], ['目录路径', x.path || '未记录']] }))) : null)
+      }
+      const channelOf = x => {
+        const t = String(x.sourceType || '').toLowerCase()
+        if (t === 'github' || t === 'remote' || String(x.id || '').startsWith('github.com/')) return 'github'
+        if (t === 'npm' || String(x.id || '').startsWith('npm:')) return 'npm'
+        return 'local'
+      }
+      const channelLabel = { github: 'GitHub 来源', npm: 'npm 来源', local: '本地材料' }
+      const installedSourceId = install => String(install?.sourceId || install?.sourceItemId || install?.materialId || '')
+      const installedChannel = install => {
+        const sid = installedSourceId(install)
+        const raw = String(install?.source || '').toLowerCase()
+        if (raw.includes('github') || /^github\.com\//i.test(sid)) return 'github'
+        if (raw.includes('npm') || /^npm:/i.test(sid) || /^@[^/]+\//.test(sid)) return 'npm'
+        if (raw.includes('local') || /^local:/i.test(sid)) return 'local'
+        return ''
+      }
+      const isInstalledRow = (x, install) => {
+        if (!install || install.state !== 'installed') return false
+        const sid = installedSourceId(install)
+        if (sid && String(x.id || '') === sid) return true
+        const ch = installedChannel(install)
+        const ver = install.installedVersion || install.version
+        return !!ch && ch === channelOf(x) && !!ver && String(x.localVersion || '') === String(ver)
+      }
+      const currentSourceOf = group => {
+        const byId = new Map(group.rows.map(r => [String(r.id || ''), r]))
+        const fallback = []
+        for (const row of group.rows) {
+          const fromResult = checks[row.id]?.result?.install
+          const inline = row._install?.state ? row._install : (row.install?.state === 'installed' ? row.install : null)
+          for (const ins of [fromResult, inline]) {
+            if (ins?.state !== 'installed') continue
+            const sid = installedSourceId(ins)
+            const exact = sid ? byId.get(sid) : null
+            if (exact) return { row: exact, install: ins, basis: 'sourceId 精确匹配' }
+            fallback.push({ row: sid ? { id: sid, sourceType: ins.source || '' } : row, install: ins, basis: '渠道与版本匹配' })
+          }
+        }
+        const carrier = group.rows.find(r => r.install?.state === 'installed') || group.rows.find(r => r._install?.state === 'installed')
+        const ci = carrier?.install?.state === 'installed' ? carrier.install : (carrier?._install?.state === 'installed' ? carrier._install : null)
+        if (ci) {
+          const sid = installedSourceId(ci)
+          const exact = sid ? byId.get(sid) : null
+          if (exact) return { row: exact, install: ci, basis: '组头安装记录精确匹配' }
+        }
+        for (const item of fallback) {
+          const ch = installedChannel(item.install)
+          const ver = item.install.installedVersion || item.install.version
+          if (ch && ver && String(item.row.localVersion || '') === String(ver)) {
+            const matched = group.rows.find(r => channelOf(r) === ch && String(r.localVersion || '') === String(ver))
+            if (matched) return { row: matched, install: item.install, basis: item.basis }
+          }
+        }
+        return null
+      }
+      const installComparisonOf = (group, currentSource) => {
+        if (!currentSource || currentSource.install?.state !== 'installed') return null
+        const target = installedSourceId(currentSource.install) || currentSource.row.id
+        const direct = checks[currentSource.row.id]?.result
+        const directMatches = !!direct?.install && String(direct.install.sourceId || '') === String(target)
+        const linked = group.rows.map(x => checks[x.id]?.result).find(r => r?.install && String(r.install.sourceId || '') === String(target))
+        const r = directMatches ? direct : linked || direct
+        if (!r || r.install?.state !== 'installed') return null
+        return ['newer', 'same', 'local-newer'].includes(r.install.comparison) ? r.install.comparison : null
+      }
+      const installCompareText = { newer: '当前安装版有新版本', same: '当前安装版已是最新', 'local-newer': '当前安装版较新' }
+      const buildChannels = (group, currentSource) => {
+        const map = new Map()
+        for (const x of group.rows) {
+          const ch = channelOf(x)
+          if (!map.has(ch)) map.set(ch, [])
+          map.get(ch).push(x)
+        }
+        return ['github', 'npm', 'local'].filter(ch => map.has(ch)).map(ch => {
+          const rows = map.get(ch)
+          const current = rows.find(r => currentSource && r.id === currentSource.row.id) || rows[0]
+          const marked = !!currentSource && current.id === currentSource.row.id
+          return { key: ch, label: channelLabel[ch], current, history: rows.filter(r => r.id !== current.id), marked }
+        })
+      }
       return h('div', { className: 'fb-page' },
         h('div', { className: 'fb-lead' }, '这一页保存插件的原始源码与来源材料，作为「胃」分析的输入；',
           h('b', null, '材料已保存 ≠ 已安装 ≠ 安全'), '，是否安装、是否信任由用户在别处决定。本页列表只读，不下载、不执行脚本、不安装。'),
         issue ? h('div', null, h('p', { className: 'fb-error', role: 'alert' }, '来源列表读取失败：' + issue), h(Retry, { onRetry: () => setRetryKey(k => k + 1) })) : null,
         !issue && !items ? h('p', { className: 'fb-note', role: 'status' }, '正在读取来源…') : null,
         !issue && items && !items.length ? h('div', { className: 'fb-note-box' }, '暂无已登记来源。') : null,
-        item ? h('section', { className: 'fb-sec' },
-          h('h3', null, '已保存的材料（点选查看）'),
-          h('div', { className: 'fb-listwrap' },
-            h('div', { className: 'fb-mlist', role: 'listbox', 'aria-label': '已保存材料' }, items.map(x => h('button', {
-              key: x.id, type: 'button', className: 'fb-mitem' + (x.id === item.id ? ' sel' : ''),
-              role: 'option', 'aria-selected': x.id === item.id ? 'true' : 'false',
-              onClick: () => setSelected(x.id)
-            }, h('div', { className: 'fb-mi-title' }, displayName(x)), h('div', { className: 'fb-mi-sub' }, '来源：', sourceLabel(x.sourceType), ' · 已保存'), checkTag(x.id)))),
-            h('div', { className: 'fb-detail' },
-              h('h4', null, displayName(item),
+        items && items.length ? h('section', { className: 'fb-sec' },
+          h('h3', null, '已保存的来源（按插件归组）'),
+          h('div', { className: 'fb-actions' },
+            h('button', { type: 'button', className: 'fb-tab fb-primary', disabled: auto.phase === 'checking', onClick: () => runBatch(true) },
+              auto.phase === 'checking' ? '正在检查…' : '重新检查全部')),
+          auto.phase === 'checking' ? h('p', { className: 'fb-rice-progress', role: 'status' }, '正在检查远端版本… 本地来源已显示，可直接查看。') : null,
+          auto.phase === 'error' ? h('div', { className: 'fb-warnbox', role: 'status' },
+            h('p', null, '远端版本自动检查暂不可用：' + auto.message),
+            h('p', null, '本地来源与已保存材料不受影响；可稍后重新检查，失败不推断是否最新。')) : null,
+          auto.phase === 'done' && auto.message ? h('p', { className: 'fb-note' }, auto.message) : null,
+          groups.map(group => {
+            const head = group.rows[0]
+            const currentSource = currentSourceOf(group)
+            const inlineInstallRow = group.rows.find(r => r.install || r._install)
+            const inlineInstall = inlineInstallRow ? (inlineInstallRow._install?.state ? inlineInstallRow._install : inlineInstallRow.install) : null
+            const install = currentSource?.install || inlineInstall || null
+            const installCmp = installComparisonOf(group, currentSource)
+            const unconfirmed = group.key.startsWith('solo:') || group.rows.some(r => r.identityBasis === 'unconfirmed') || !packageNameOf(head)
+            const groupName = String(head.groupName || packageNameOf(head) || displayName(head) || '未命名来源')
+            const description = String(head.description || '').trim()
+            const channels = buildChannels(group, currentSource)
+            const anyNewer = group.rows.some(x => checks[x.id]?.result?.comparison === 'newer')
+            return h('article', { key: group.key, className: 'fb-rice-card' },
+              h('div', { className: 'fb-rice-card-h' },
+                h('h4', null, groupName),
                 h(Tag, { tone: 'ok' }, '材料已保存'),
-                item.hasRemote && checks[item.id]?.result?.comparison === 'newer' ? h(Tag, { tone: 'warn' }, '远端有新版本') : null),
-              h(KV, { rows: [
-                ['名称', displayName(item)],
-                ['来源', sourceLabel(item.sourceType) + '（' + (item.sourceType || '未标注') + '）'],
-                ['本地版本', item.localVersion || '未记录'],
-                ['材料状态', item.hasRemote ? '有远端来源，版本需核实' : '本地材料，无远端来源'],
-                ['分析入口', '材料已保存，可到「胃·分析」选择任务或分析结果']
-              ] }),
-              h('p', { className: 'fb-note' }, '材料保存只代表来源目录留在本地，不代表已安装或已确认安全；本页不执行下载或分析。'),
-              item.hasRemote ? h('div', { className: 'fb-actions' },
-                h('button', { type: 'button', className: 'fb-tab fb-primary', disabled: !!checks[item.id]?.pending, onClick: () => check(item.id) },
-                  checks[item.id]?.pending ? '正在检查…' : '检查远端版本')) : h('p', { className: 'fb-note' }, '没有远端来源的本地材料不标「已是最新」。'),
-              renderCheck(item),
+                installTag(install),
+                unconfirmed ? h(Tag, { tone: 'warn' }, '来源关联未确认') : null,
+                installCmp ? h(Tag, { tone: installCmp === 'newer' ? 'warn' : 'ok' }, installCompareText[installCmp]) : null,
+                anyNewer ? h(Tag, { tone: 'warn' }, '有新版本 · 与保存材料比较') : null),
+              description ? h('p', { className: 'fb-rice-desc' }, description) : null,
+              channels.map(ch => h('section', { key: ch.key, className: 'fb-rice-channel' },
+                h('h5', null, ch.label),
+                ch.marked ? h(Tag, { tone: 'ok' }, '当前使用来源') : (install?.state === 'installed' ? h(Tag, { tone: 'warn' }, '当前使用来源未确认') : h(Tag, { tone: 'info' }, '已保存记录')),
+                sourceRow(ch.current, '保存材料'),
+                ch.history.length ? h(Tech, { title: '历史获取记录（' + ch.history.length + '）' }, ch.history.map(x => sourceRow(x, '保存材料'))) : null)),
               h('div', { className: 'fb-actions' },
                 sectionPath ? h('button', { type: 'button', className: 'fb-tab', disabled: pendingOpen, onClick: open }, pendingOpen ? '正在打开…' : '打开材料目录（唯一入口）') : null,
                 typeof onNavigate === 'function' ? h('button', { type: 'button', className: 'fb-tab', onClick: () => onNavigate('stomach') }, '到胃·分析查看') : null),
               openIssue ? h('p', { className: 'fb-error', role: 'alert' }, openIssue) : null,
-              h(Tech, { title: '完整提交与技术清单（折叠，默认不展示）' },
+              h(Tech, { title: '归组与技术清单（折叠，默认不展示）' },
                 h(KV, { rows: [
-                  ['来源编号', item.id],
-                  ['来源类型', item.sourceType || '未标注'],
-                  ['远端来源', item.hasRemote ? '已登记' : '无'],
-                  ['目录路径', item.path || '未记录']
+                  ['归组键', group.key],
+                  ['身份依据', String(head.identityBasis || '未记录')],
+                  ['安装依据', String(install?.basis || currentSource?.basis || '未提供')],
+                  ['当前来源依据', currentSource?.basis || '当前使用来源未确认'],
+                  ['目录路径', head.path || '未记录']
                 ] }),
-                h('p', { className: 'fb-note' }, '检查失败时显示「暂时无法检查」，历史结果标注「历史结果·当前未确认」；不伪造版本结论。'),
-                h('pre', { className: 'fb-task-output' }, JSON.stringify({ item, check: checks[item.id] || null }, null, 2)))))) : null,
+                h('p', { className: 'fb-note' }, '来源关联未确认时单列展示，不与疑似同名的其他来源合并；检查失败显示「暂时无法检查」，历史结果标注「历史结果·当前未确认」。'),
+                h('pre', { className: 'fb-task-output' }, JSON.stringify({ group, channels: channels.map(ch => ({ channel: ch.key, current: ch.current.id, history: ch.history.map(x => x.id) })), checks: group.rows.map(x => ({ id: x.id, check: checks[x.id] || null })) }, null, 2))))
+            })) : null,
         h(Foot, null, '鱼的脑是独立设置项，不并入身体页面。 · 本页只读取来源目录与后端版本结论，不下载、不安装、不分析；检查按钮不代表安装授权。'))
     }
 
