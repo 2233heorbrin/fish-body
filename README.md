@@ -1,5 +1,9 @@
 # fish-body（鱼的身体）
 
+## 鱼身体主导航迁移 + 饭页两渠道布局（0.0.7-dev.16，分支测试版）
+
+> dev.16 把鱼身体入口从设置侧栏迁到 DSH 主侧栏（main keyed panel + sidebar.panellist，返回会话走 `ctx.get('layout')?.selectPanel(null)`），饭·来源页改为左紧凑列表 + 右唯一详情、GitHub 仓库 / npm 两渠道分段切换与缺材料提示；并按 Codex #283 修正饭页渲染四处偏差（版本结论正文可见、stateTag 只认当前渠道有效检查、列表定高可滚动、链接统一「查看来源」）；后端与依赖不动。node --check、UI 契约 41/41、注入法真实渲染全绿；本轮另完成 dev.16 本地打包 + 隔离 DSH 原生安装 + Edge 真机截图，详见同目录执行报告。详见 CHANGELOG dev.16 段。
+
 ## Codex dev.14 五次复核 URL 大小写定向补修定版（0.0.7-dev.15，分支测试版）
 
 > dev.15 只修 Codex 第五次复核退回的一处：`resolutionIdentity` 旧实现对整条远端 URL `.toLowerCase()` 把大小写敏感 pathname（DEMO.tgz vs demo.tgz）归一导致同名误认；改用标准 `new URL()`，protocol/host 标准归一、pathname/search/hash 保留大小写，file 走 pathIdentity、其余类别不一律小写。Codex URL 探针 2 条转绿、正例与 dev14 全部反例不回归、全套 103/103、真机 context/meme 仍 installed。界面/接线/其余证据沿用 dev.14 不重做。详见 CHANGELOG dev.15 段。

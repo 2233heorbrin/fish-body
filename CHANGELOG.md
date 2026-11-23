@@ -1,5 +1,12 @@
 # 更新记录
 
+## 0.0.7-dev.16 — 2026-11-22（鱼身体主导航迁移 + 饭页 GitHub/npm 两渠道布局测试版）
+
+- 鱼身体入口从设置侧栏迁到 DSH 主侧栏：client.js 注册 main keyed panel + sidebar.panellist，返回会话按钮走 `ctx.get('layout')?.selectPanel(null)` 回到原会话，不再藏在设置页里。
+- 饭·来源页改为认可图布局：左侧紧凑插件列表 + 右侧唯一详情；GitHub 仓库 / npm 两渠道分段切换（seg 按钮 + 键盘左右），当前所看渠道只影响显示哪份材料、不代表安装切换；缺材料时给出明确提示；材料版本 / 安装状态 / 来源关联未确认口径不变。
+- 按 Codex #283 四处设计偏差修正饭页渲染层：①版本结论（远端版本 / 中文结论 / 当前安装比较）改为正文默认可见、仅技术细节折叠（新增 `.fb-ver-main` / `versionSummary`）；②`stateTag` 只按当前渠道材料的有效检查判定，不拿同组其它渠道 / 历史的 `newer` 冒充；③`.fb-rice-list` 加 `max-height:460px` + `overflow-y:auto`，窄版 `max-height:220px` 也不铺开；④来源链接统一标「查看来源」（无专门更新说明字段）、去掉正文操作组与 `renderCheck` 的重复链接；另面包屑改「鱼的身体 · 工作区」。
+- 仅前端 client.js 接线与布局改动，后端与依赖不动。验证：node --check 通过、UI 契约测试 41/41、注入法真实渲染全绿；本轮 dev.16 另完成本地打包（client.js 与工作树逐字节一致）+ 隔离 DSH 原生安装 + Edge 真机截图，详见本目录执行报告。仅本地测试分支与隔离打包验证，未合并 / tag / Release / registry。
+
 ## 0.0.7-dev.15 — 2026-11-22（Codex dev.14 五次复核 URL 大小写一处定向补修定版测试版）
 
 - 按 Codex dev.14 第五次复核退回的唯一一处定向补修（其余路径身份反例/契约/追加测试/真机 context+meme/界面接线/包 SHA 全部通过保留，不重做 UI、不重跑整套 U/H/E）：`resolutionIdentity` 旧实现对整条远端 URL `.toLowerCase()`，把大小写敏感的 pathname（如 `DEMO.tgz` vs `demo.tgz`）也归一导致同名误认。改为标准 `new URL()`——`protocol`/`host` 按 WHATWG 标准归一（hostname 小写、去默认端口），`pathname`（仅去尾斜杠）/`search`/`hash` 原样保留大小写，重建 `url:` 引用；非标准 URL 兜底只小写 scheme+host、path 段保留；`file:` 继续走 pathIdentity、`ref:` 去掉一律小写；保留 `url:`/`path:`/`ref:` 类别前缀杜绝跨类误判。仅改 `internal/backend/lib/install-mapping.mjs` 一处 + 2 条 URL 大小写专项测试，其他生产文件/版本签名文件不动。

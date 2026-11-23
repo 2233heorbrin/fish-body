@@ -176,6 +176,11 @@ function installDataClient(React, ctx, component) {
 .fb-nav:hover{color:var(--fb-label);background:rgba(128,128,128,.05)}
 .fb-nav[aria-pressed="true"]{color:var(--fb-brand);border-bottom-color:var(--fb-brand);font-weight:600}
 .fb-nav:focus-visible,.fb-tab:focus-visible,.fb-open:focus-visible,.fb-mitem:focus-visible{outline:2px solid var(--fb-brand);outline-offset:2px}
+/* 主导航工作区外壳：返回按钮在 fb-root 外，外壳自带同样的变量/字体/内边距，避免贴边与样式丢失（#286-1） */
+.fb-mainpage{--fb-label:#1f2328;--fb-label2:#5b6570;--fb-brand:#2f6feb;--fb-border:#d3d8de;--fb-border1:#e2e6ea;--fb-bg2:rgba(128,128,128,.08);--fb-radius:10px;--fb-sm:6px;--fb-err:#c92a2a;--fb-errbg:#fff5f5;--fb-errborder:#ffc9c9;--fb-warn:#d9480f;--fb-warnbg:#fffaf3;--fb-warnborder:#ffc9a3;--fb-ok:#1a7f37;--fb-okbg:#eaf7ee;--fb-okborder:#b7e2c4;box-sizing:border-box;min-height:100%;padding:16px 20px 28px;overflow-y:auto;overscroll-behavior:contain;color:var(--fb-label);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.6}
+.fb-mainpage *,.fb-mainpage *::before,.fb-mainpage *::after{box-sizing:border-box}
+.fb-mainbar{display:flex;align-items:center;margin:0 0 14px}
+.fb-mainbar .fb-back{margin:0}
 .fb-page{margin:0}
 .fb-sec{margin:0 0 22px}
 .fb-tasks-incomplete .fb-stomach-full{display:none}
@@ -238,6 +243,33 @@ function installDataClient(React, ctx, component) {
 .fb-detail h4{margin:0 0 10px;font-size:14px;font-weight:600}
 .fb-detail h4 .fb-tag,.fb-detail h4 .fb-badge{vertical-align:middle}
 .fb-detail .fb-actions{margin-top:10px}
+.fb-rice-tool{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.fb-seg{display:inline-flex;border:1px solid var(--fb-border);border-radius:8px;overflow:hidden}
+.fb-seg button{appearance:none;font:inherit;font-size:12.5px;padding:6px 14px;background:#fff;color:var(--fb-label2);border:0;cursor:pointer;line-height:1.6}
+.fb-seg button+button{border-left:1px solid var(--fb-border)}
+.fb-seg button.on{background:var(--fb-brand);color:#fff;font-weight:600}
+.fb-seg button:focus-visible{outline:2px solid var(--fb-brand);outline-offset:-2px}
+.fb-rice-progress{margin:8px 0;font-size:12.5px;color:var(--fb-label2)}
+.fb-rice-hint{margin:8px 0;padding:6px 10px;border:1px solid var(--fb-okborder);border-radius:var(--fb-sm);background:var(--fb-okbg);color:var(--fb-ok);font-size:12.5px;line-height:1.6}
+.fb-rice-layout{display:flex;align-items:flex-start;gap:14px}
+.fb-rice-list{flex:0 0 220px;min-width:0;max-height:460px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--fb-border1);border-radius:var(--fb-radius);background:#fff}
+.fb-rice-item{appearance:none;display:block;width:100%;padding:11px 13px;border:0;border-bottom:1px solid var(--fb-border1);background:#fff;color:var(--fb-label);font-size:13px;line-height:1.6;text-align:left;cursor:pointer}
+.fb-rice-item:last-child{border-bottom:0}
+.fb-rice-item:hover{background:#fafbfc}
+.fb-rice-item.sel{background:#f0f5ff;box-shadow:inset 3px 0 0 var(--fb-brand)}
+.fb-rice-item:focus-visible{outline:2px solid var(--fb-brand);outline-offset:-2px}
+.fb-rice-item-nm{font-weight:600}
+.fb-rice-item-sf{margin-top:2px;color:var(--fb-label2);font-size:12px}
+.fb-rice-detail{flex:1;min-width:0;padding:14px 16px;border:1px solid var(--fb-border1);border-radius:var(--fb-radius);background:#fff}
+.fb-rice-detail-h{display:flex;flex-wrap:wrap;align-items:center;gap:0 6px;margin-bottom:10px}
+.fb-rice-detail-h h4{margin:0;font-size:14px;font-weight:600}
+.fb-rice-detail .fb-actions{margin-top:10px}
+.fb-rice-empty{color:var(--fb-label2);text-align:center;padding:26px 14px}
+.fb-rice-local{margin-top:12px;font-size:12.5px;color:var(--fb-label2)}
+@media(max-width:700px){.fb-rice-layout{flex-direction:column}.fb-rice-list{flex:1 1 auto;width:100%;max-height:220px;display:block;overflow-y:auto}.fb-rice-item{border-bottom:1px solid var(--fb-border1)}}
+.fb-ver-main{margin:12px 0;padding:12px 14px;border:1px solid var(--fb-border1);border-radius:var(--fb-radius);background:var(--fb-bg2);font-size:13px;line-height:1.7}
+.fb-ver-main .fb-et{margin:0 0 6px;color:var(--fb-label);font-size:13.5px;font-weight:600}
+.fb-ver-main .fb-kv{grid-template-columns:110px minmax(0,1fr)}
 .fb-verbox{margin:12px 0;padding:12px 14px;border:1px solid var(--fb-warnborder);border-radius:var(--fb-radius);background:var(--fb-warnbg);font-size:13px;line-height:1.7}
 .fb-verbox .fb-et{margin:0 0 6px;color:var(--fb-warn);font-size:13.5px;font-weight:600}
 .fb-verbox .fb-kv{grid-template-columns:100px 1fr}
@@ -793,14 +825,22 @@ function installDataClient(React, ctx, component) {
       const [openIssue, setOpenIssue] = useState('')
       const [expanded, setExpanded] = useState({})
       const [auto, setAuto] = useState({ phase: 'idle', message: '', checkedAt: null, dedupCount: null })
+      const [viewChannel, setViewChannel] = useState('github')
+      const [picked, setPicked] = useState({ github: null, npm: null })
+      const [switchHint, setSwitchHint] = useState('')
+      const pickRef = useRef({ github: null, npm: null })
+      const scrollRef = useRef({ github: 0, npm: 0 })
+      const listRef = useRef(null)
+      const segRefs = useRef({})
       const liveRef = useRef(true)
       const autoStartedRef = useRef(false)
       useEffect(() => { liveRef.current = true; autoStartedRef.current = false; return () => { liveRef.current = false } }, [retryKey])
+      useEffect(() => { const n = listRef.current; if (n) n.scrollTop = scrollRef.current[viewChannel] || 0 }, [viewChannel])
       useEffect(() => {
         let cancelled = false
         setIssue(''); setItems(null); setChecks({}); setExpanded({}); setAuto({ phase: 'idle', message: '', checkedAt: null, dedupCount: null })
         fetchJson('/api/fish-body/sources')
-          .then(value => { if (!cancelled && liveRef.current) setItems(Array.isArray(value?.items) ? value.items : []) })
+          .then(value => { if (!cancelled && liveRef.current) { const loaded = Array.isArray(value?.items) ? value.items : []; setItems(loaded) } })
           .catch(error => { if (!cancelled && liveRef.current) setIssue(error.message) })
         return () => { cancelled = true }
       }, [retryKey])
@@ -1013,8 +1053,8 @@ function installDataClient(React, ctx, component) {
             ] }),
             h('p', { className: 'fb-note' }, '只表示该来源有新版本，不代表已安装版可无缝切换；版本结论只读取后端比较。'),
             h('div', { className: 'fb-actions' }, updateUrl
-              ? h('a', { className: 'fb-tab', href: updateUrl, target: '_blank', rel: 'noreferrer' }, '查看更新说明')
-              : h('button', { type: 'button', className: 'fb-tab', disabled: true, title: '后端未提供可打开的更新说明链接' }, '查看更新说明（无可打开链接）')))
+              ? h('a', { className: 'fb-tab', href: updateUrl, target: '_blank', rel: 'noreferrer' }, '查看来源')
+              : null))
         }
         return h('div', { className: 'fb-verbox' },
           h('p', { className: 'fb-et' }, compareText[cmp] || '版本关系未确认'),
@@ -1137,6 +1177,123 @@ function installDataClient(React, ctx, component) {
           return { key: ch, label: channelLabel[ch], current, history: rows.filter(r => r.id !== current.id), marked }
         })
       }
+
+      /* 渲染层：按渠道查看的紧凑左列表 + 右唯一详情（数据逻辑全部复用上方 groups/buildChannels/checks/install） */
+      const segLabel = { github: 'GitHub 仓库', npm: 'npm' }
+      const groupNameOf = group => {
+        const head = group.rows[0] || {}
+        return String(head.groupName || packageNameOf(head) || displayName(head) || '未命名来源')
+      }
+      const installOf = group => {
+        const cs = currentSourceOf(group)
+        if (cs && cs.install) return cs.install
+        const row = group.rows.find(r => r.install || r._install)
+        return row ? (row._install && row._install.state ? row._install : row.install) : null
+      }
+      // 当前渠道下每个插件一条（用该渠道 current 记录，历史折叠进详情）
+      const entriesOf = ch => {
+        const out = []
+        for (const group of groups) {
+          const channels = buildChannels(group, currentSourceOf(group))
+          const info = channels.find(c => c.key === ch)
+          if (!info) continue
+          out.push({ group, groupKey: group.key, name: groupNameOf(group), info, install: installOf(group) })
+        }
+        return out
+      }
+      const entries = entriesOf(viewChannel)
+      // 默认选中当前渠道第一项：picked 尚未设置或旧键不在本渠道时回退，保证详情区始终有内容
+      const pickKey = (picked[viewChannel] && entries.some(e => e.groupKey === picked[viewChannel]))
+        ? picked[viewChannel] : (entries.length ? entries[0].groupKey : null)
+      const pickedEntry = entries.find(e => e.groupKey === pickKey) || null
+      const localOnly = groups.filter(g => {
+        const chans = buildChannels(g, currentSourceOf(g)).map(c => c.key)
+        return chans.length && chans.every(c => c === 'local')
+      })
+      const selectEntry = (ch, key) => {
+        pickRef.current = { ...pickRef.current, [ch]: key }
+        setPicked(pickRef.current)
+        setSwitchHint('')
+      }
+      const chooseOnSwitch = target => {
+        if (target === viewChannel) return
+        if (listRef.current) scrollRef.current[viewChannel] = listRef.current.scrollTop
+        const curKey = picked[viewChannel] || pickRef.current[viewChannel] || (entries.length ? entries[0].groupKey : null)
+        const currentEntry = entries.find(e => e.groupKey === curKey)
+        const targetEntries = entriesOf(target)
+        const targetKeys = targetEntries.map(e => e.groupKey)
+        let next, hint = ''
+        if (currentEntry && targetKeys.includes(currentEntry.groupKey)) {
+          next = currentEntry.groupKey // 同插件在目标渠道有材料则保留
+        } else {
+          const prev = picked[target] || pickRef.current[target]
+          next = (prev && targetKeys.includes(prev)) ? prev : (targetEntries.length ? targetEntries[0].groupKey : null)
+          if (currentEntry) {
+            const nextName = next ? (targetEntries.find(e => e.groupKey === next) || {}).name || '空' : '空'
+            hint = '当前插件「' + currentEntry.name + '」没有 ' + segLabel[target] + ' 材料，已显示「' + nextName + '」。'
+          }
+        }
+        pickRef.current = { ...pickRef.current, [target]: next }
+        setPicked(pickRef.current)
+        setSwitchHint(hint)
+        setViewChannel(target)
+      }
+      const segKeyDown = (event, ch) => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+        event.preventDefault()
+        const target = ch === 'github' ? 'npm' : 'github'
+        chooseOnSwitch(target)
+        const node = segRefs.current[target]
+        if (node && typeof node.focus === 'function') node.focus()
+      }
+      const installLine = install => {
+        if (!install || install.state !== 'installed') return install && install.state === 'unconfirmed' ? '当前安装来源未确认' : '未安装'
+        const ch = installedChannel(install)
+        const ver = install.version || install.installedVersion || '版本未记录'
+        return (ch ? segLabel[ch] || channelLabel[ch] : install.source || '来源') + ' · ' + ver + '（当前安装）'
+      }
+      // 版本结论正文：默认可见远端版本/中文结论/当前安装比较，技术细节才折叠（#283-1）
+      const versionSummary = entry => {
+        const row = entry.info.current
+        const c = checks[row.id]
+        const r = c && c.result
+        const rows = []
+        // 沿旧 renderCheck 语义：请求失败(c.error)与失败态(state)都不把远端版本当当前结论（#286-4）
+        const failedState = r && ['historical', 'error', 'unavailable', 'incomparable'].includes(r.state)
+        if (c && c.error) {
+          rows.push(['版本结论', '本次未确认（远端检查失败）'])
+        } else if (c && c.pending) {
+          rows.push(['远端版本', '正在检查…'])
+          rows.push(['版本结论', '正在检查远端版本…'])
+        } else if (failedState) {
+          // 历史/失败态的远端版本只能是"上次成功"，不能标成当前
+          rows.push(['远端版本', (r.remoteVersion ? r.remoteVersion + '（上次成功）' : '未取得')])
+          rows.push(['版本结论', '本次未确认，不推断是否最新'])
+          if (r.lastSuccessAt) rows.push(['上次成功时间', r.lastSuccessAt])
+        } else if (r) {
+          rows.push(['远端版本', r.remoteVersion || '未取得'])
+          rows.push(['版本结论', compareText[r.comparison] || '版本关系未确认'])
+        } else {
+          rows.push(['版本结论', '尚未检查，未确认是否最新'])
+        }
+        const instCmp = installComparisonOf(entry.group, currentSourceOf(entry.group))
+        if (instCmp) rows.push(['当前安装版比较', installCompareText[instCmp] || '版本关系未确认'])
+        return h('div', { className: 'fb-ver-main' },
+          h('p', { className: 'fb-et' }, c && c.error ? '远端版本暂时无法检查' : '版本结论（后端）'),
+          h(KV, { rows }),
+          (c && c.error) || failedState ? h('p', { className: 'fb-note' }, '上面的远端版本不是本次结论；本次未确认。') : null,
+          h(Tech, { title: '版本检查技术细节（后端原始数据）' }, renderCheck(row, '保存材料')))
+      }
+      const stateTag = entry => {
+        if (entry.group.key.startsWith('solo:') || entry.group.rows.some(r => r.identityBasis === 'unconfirmed') || !packageNameOf(entry.group.rows[0]))
+          return h(Tag, { tone: 'warn' }, '来源关联未确认')
+        // 只按当前所看渠道的代表材料（current）的有效检查表达状态；不拿同组其它渠道/历史的 newer 冒充本渠道更新
+        const curCheck = checks[entry.info.current?.id]
+        if (curCheck?.result && ['historical', 'error', 'unavailable', 'incomparable'].includes(curCheck.result.state))
+          return h(Tag, { tone: 'warn' }, '版本未确认')
+        if (curCheck?.result?.comparison === 'newer') return h(Tag, { tone: 'warn' }, '有新版本 · 与保存材料比较')
+        return h(Tag, { tone: 'ok' }, '材料已就绪')
+      }
       return h('div', { className: 'fb-page' },
         h('div', { className: 'fb-lead' }, '这一页保存插件的原始源码与来源材料，作为「胃」分析的输入；',
           h('b', null, '材料已保存 ≠ 已安装 ≠ 安全'), '，是否安装、是否信任由用户在别处决定。本页列表只读，不下载、不执行脚本、不安装。'),
@@ -1144,8 +1301,21 @@ function installDataClient(React, ctx, component) {
         !issue && !items ? h('p', { className: 'fb-note', role: 'status' }, '正在读取来源…') : null,
         !issue && items && !items.length ? h('div', { className: 'fb-note-box' }, '暂无已登记来源。') : null,
         items && items.length ? h('section', { className: 'fb-sec' },
-          h('h3', null, '已保存的来源（按插件归组）'),
-          h('div', { className: 'fb-actions' },
+          h('h3', null, '已保存的材料（点选查看）'),
+          h('div', { className: 'fb-rice-tool' },
+            h('div', { className: 'fb-seg', role: 'tablist', 'aria-label': '来源渠道' },
+              h('button', {
+                type: 'button', role: 'tab', key: 'github', ref: node => { segRefs.current.github = node },
+                className: viewChannel === 'github' ? 'on' : '', 'aria-selected': viewChannel === 'github' ? 'true' : 'false',
+                tabIndex: viewChannel === 'github' ? 0 : -1,
+                onClick: () => chooseOnSwitch('github'), onKeyDown: e => segKeyDown(e, 'github')
+              }, 'GitHub 仓库'),
+              h('button', {
+                type: 'button', role: 'tab', key: 'npm', ref: node => { segRefs.current.npm = node },
+                className: viewChannel === 'npm' ? 'on' : '', 'aria-selected': viewChannel === 'npm' ? 'true' : 'false',
+                tabIndex: viewChannel === 'npm' ? 0 : -1,
+                onClick: () => chooseOnSwitch('npm'), onKeyDown: e => segKeyDown(e, 'npm')
+              }, 'npm')),
             h('button', { type: 'button', className: 'fb-tab fb-primary', disabled: auto.phase === 'checking', onClick: () => runBatch(true) },
               auto.phase === 'checking' ? '正在检查…' : '重新检查全部')),
           auto.phase === 'checking' ? h('p', { className: 'fb-rice-progress', role: 'status' }, '正在检查远端版本… 本地来源已显示，可直接查看。') : null,
@@ -1153,47 +1323,46 @@ function installDataClient(React, ctx, component) {
             h('p', null, '远端版本自动检查暂不可用：' + auto.message),
             h('p', null, '本地来源与已保存材料不受影响；可稍后重新检查，失败不推断是否最新。')) : null,
           auto.phase === 'done' && auto.message ? h('p', { className: 'fb-note' }, auto.message) : null,
-          groups.map(group => {
-            const head = group.rows[0]
-            const currentSource = currentSourceOf(group)
-            const inlineInstallRow = group.rows.find(r => r.install || r._install)
-            const inlineInstall = inlineInstallRow ? (inlineInstallRow._install?.state ? inlineInstallRow._install : inlineInstallRow.install) : null
-            const install = currentSource?.install || inlineInstall || null
-            const installCmp = installComparisonOf(group, currentSource)
-            const unconfirmed = group.key.startsWith('solo:') || group.rows.some(r => r.identityBasis === 'unconfirmed') || !packageNameOf(head)
-            const groupName = String(head.groupName || packageNameOf(head) || displayName(head) || '未命名来源')
-            const description = String(head.description || '').trim()
-            const channels = buildChannels(group, currentSource)
-            const anyNewer = group.rows.some(x => checks[x.id]?.result?.comparison === 'newer')
-            return h('article', { key: group.key, className: 'fb-rice-card' },
-              h('div', { className: 'fb-rice-card-h' },
-                h('h4', null, groupName),
-                h(Tag, { tone: 'ok' }, '材料已保存'),
-                installTag(install),
-                unconfirmed ? h(Tag, { tone: 'warn' }, '来源关联未确认') : null,
-                installCmp ? h(Tag, { tone: installCmp === 'newer' ? 'warn' : 'ok' }, installCompareText[installCmp]) : null,
-                anyNewer ? h(Tag, { tone: 'warn' }, '有新版本 · 与保存材料比较') : null),
-              description ? h('p', { className: 'fb-rice-desc' }, description) : null,
-              channels.map(ch => h('section', { key: ch.key, className: 'fb-rice-channel' },
-                h('h5', null, ch.label),
-                ch.marked ? h(Tag, { tone: 'ok' }, '当前使用来源') : (install?.state === 'installed' ? h(Tag, { tone: 'warn' }, '当前使用来源未确认') : h(Tag, { tone: 'info' }, '已保存记录')),
-                sourceRow(ch.current, '保存材料'),
-                ch.history.length ? h(Tech, { title: '历史获取记录（' + ch.history.length + '）' }, ch.history.map(x => sourceRow(x, '保存材料'))) : null)),
+          switchHint ? h('p', { className: 'fb-rice-hint', role: 'status' }, switchHint) : null,
+          h('div', { className: 'fb-rice-layout' },
+            h('div', { className: 'fb-rice-list', role: 'listbox', 'aria-label': segLabel[viewChannel] + ' 插件列表', ref: listRef },
+              entries.length ? entries.map(e => h('button', {
+                type: 'button', key: e.groupKey, className: 'fb-rice-item' + (e.groupKey === pickKey ? ' sel' : ''),
+                role: 'option', 'aria-selected': e.groupKey === pickKey ? 'true' : 'false',
+                onClick: () => selectEntry(viewChannel, e.groupKey)
+              },
+                h('div', { className: 'fb-rice-item-nm' }, e.name),
+                h('div', { className: 'fb-rice-item-sf' }, (e.info.current.localVersion ? e.info.current.localVersion + ' · ' : '') + '已保存'))) : null),
+            pickedEntry ? h('div', { className: 'fb-rice-detail' },
+              h('div', { className: 'fb-rice-detail-h' },
+                h('h4', null, pickedEntry.name), stateTag(pickedEntry)),
+              h(KV, { rows: [
+                ['名称', pickedEntry.name],
+                ['所看渠道', segLabel[viewChannel] + '（仅查看该渠道材料，不代表安装切换）'],
+                ['实际安装', installLine(pickedEntry.install)],
+                ['材料版本', pickedEntry.info.current.localVersion || '未记录'],
+                ['来源', sourceLabel(pickedEntry.info.current.sourceType) + '（' + pickedEntry.info.label + '）']
+              ] }),
+              versionSummary(pickedEntry),
+              h('p', { className: 'fb-note' }, '当前所看渠道只影响这里显示哪份材料，不切换安装来源。材料已保存 ≠ 已安装 ≠ 安全。'),
               h('div', { className: 'fb-actions' },
                 sectionPath ? h('button', { type: 'button', className: 'fb-tab', disabled: pendingOpen, onClick: open }, pendingOpen ? '正在打开…' : '打开材料目录（唯一入口）') : null,
-                typeof onNavigate === 'function' ? h('button', { type: 'button', className: 'fb-tab', onClick: () => onNavigate('stomach') }, '到胃·分析查看') : null),
+                typeof onNavigate === 'function' ? h('button', { type: 'button', className: 'fb-tab', onClick: () => onNavigate('stomach') }, '到胃·分析查看') : null,
+                pickedEntry.info.current.hasRemote ? h('button', { type: 'button', className: 'fb-tab', disabled: !!checks[pickedEntry.info.current.id]?.pending, onClick: () => check(pickedEntry.info.current.id, true) }, checks[pickedEntry.info.current.id]?.pending ? '正在检查…' : '重新检查') : null),
               openIssue ? h('p', { className: 'fb-error', role: 'alert' }, openIssue) : null,
-              h(Tech, { title: '归组与技术清单（折叠，默认不展示）' },
+              pickedEntry.info.history.length ? h(Tech, { title: '该渠道历史记录（' + pickedEntry.info.history.length + '，折叠）' }, pickedEntry.info.history.map(x => sourceRow(x, '保存材料'))) : null,
+              h(Tech, { title: '技术详情（折叠，默认不展示，不按哈希选择）' },
                 h(KV, { rows: [
-                  ['归组键', group.key],
-                  ['身份依据', String(head.identityBasis || '未记录')],
-                  ['安装依据', String(install?.basis || currentSource?.basis || '未提供')],
-                  ['当前来源依据', currentSource?.basis || '当前使用来源未确认'],
-                  ['目录路径', head.path || '未记录']
+                  ['归组键', pickedEntry.group.key],
+                  ['身份依据', String(pickedEntry.group.rows[0].identityBasis || '未记录')],
+                  ['安装依据', String(pickedEntry.install?.basis || currentSourceOf(pickedEntry.group)?.basis || '未提供')],
+                  ['目录路径', pickedEntry.group.rows[0].path || '未记录']
                 ] }),
-                h('p', { className: 'fb-note' }, '来源关联未确认时单列展示，不与疑似同名的其他来源合并；检查失败显示「暂时无法检查」，历史结果标注「历史结果·当前未确认」。'),
-                h('pre', { className: 'fb-task-output' }, JSON.stringify({ group, channels: channels.map(ch => ({ channel: ch.key, current: ch.current.id, history: ch.history.map(x => x.id) })), checks: group.rows.map(x => ({ id: x.id, check: checks[x.id] || null })) }, null, 2))))
-            })) : null,
+                h('pre', { className: 'fb-task-output' }, JSON.stringify({ group: pickedEntry.group, channels: buildChannels(pickedEntry.group, currentSourceOf(pickedEntry.group)).map(c => ({ channel: c.key, current: c.current.id, history: c.history.map(x => x.id) })), checks: pickedEntry.group.rows.map(x => ({ id: x.id, check: checks[x.id] || null })) }, null, 2))))
+            : h('div', { className: 'fb-rice-detail fb-rice-empty', role: 'status' }, '暂无 ' + segLabel[viewChannel] + ' 材料')),
+          localOnly.length ? h('div', { className: 'fb-rice-local' },
+            '仅本地材料的插件：',
+            h(Tech, { title: '查看本地材料列表（' + localOnly.length + '）' }, localOnly.map(g => sourceRow(g.rows[0], '保存材料')))) : null) : null,
         h(Foot, null, '鱼的脑是独立设置项，不并入身体页面。 · 本页只读取来源目录与后端版本结论，不下载、不安装、不分析；检查按钮不代表安装授权。'))
     }
 
@@ -1575,7 +1744,7 @@ function installDataClient(React, ctx, component) {
       return h('div', { className: 'fb-root' },
         h('style', { dangerouslySetInnerHTML: { __html: STYLE } }),
         h('div', { className: 'fb-head' },
-          h('p', { className: 'fb-crumb' }, '设置 / 鱼的身体'),
+          h('p', { className: 'fb-crumb' }, '鱼的身体 · 工作区'),
           h('h2', { className: 'fb-title' }, head[0]),
           h('p', { className: 'fb-sub' }, head[1])),
         tabs,
@@ -1583,16 +1752,48 @@ function installDataClient(React, ctx, component) {
         body)
     }
 
+    // 主导航入口：宿主侧栏把「鱼的身体」当一等工作区面板派发；主内容区直接显示整页。
+    // 图标只用 currentColor 画线，尺寸/激活态由宿主经 props 传入；返回会话走宿主布局 selectPanel(null)，
+    // 会话不切换（消息、草稿、后台任务按 sessionId 天然保留）。原生启停仍走宿主 slot 生命周期。
+    const PANEL_ID = 'fish-body'
+    const backToConversation = ctx => () => {
+      const layout = ctx.get('layout')
+      if (layout && typeof layout.selectPanel === 'function') layout.selectPanel(null)
+    }
+    function FishBodyMainPage({ backToConversation: back } = {}) {
+      return h('div', { className: 'fb-mainpage' },
+        h('div', { className: 'fb-mainbar' },
+          h('button', { type: 'button', className: 'fb-tab fb-back', onClick: typeof back === 'function' ? back : undefined }, '返回会话')),
+        h(FishBodySection))
+    }
+    function FishBodySidebarIcon({ size, active } = {}) {
+      const edge = typeof size === 'number' && size > 0 ? Math.min(20, Math.max(16, size)) : 18
+      return h('svg', {
+        width: edge, height: edge, viewBox: '0 0 24 24', fill: 'none',
+        stroke: 'currentColor', 'stroke-width': active ? 2 : 1.7,
+        'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+        'aria-hidden': 'true', focusable: 'false', className: 'fb-panel-icon'
+      },
+        h('path', { d: 'M12 3 3 8l9 5 9-5-9-5Z' }),
+        h('path', { d: 'M3 13l9 5 9-5' }))
+    }
+
     return {
       inject: ['slots', 'sessions', 'remote', 'remote.directoryPicker'],
       apply(ctx) {
         FishDataPanel = installDataClient(React, ctx, 'body')
-        ctx.slots.inject('settings.section', () => ctx.slots.register({
-          name: 'settings.section',
-          id: 'fish-body',
+        ctx.slots.inject('main', () => ctx.slots.register({
+          name: 'main',
+          key: PANEL_ID,
+          label: () => '鱼的身体',
+          inject: () => ({ backToConversation: backToConversation(ctx) })
+        }, FishBodyMainPage))
+        ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+          name: 'sidebar.panellist',
+          id: PANEL_ID,
           order: 20,
           label: () => '鱼的身体'
-        }, FishBodySection))
+        }, FishBodySidebarIcon))
       }
     }
   }
