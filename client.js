@@ -290,7 +290,7 @@ function installDataClient(React, ctx, component) {
 .fb-cd .fb-kv .fb-k{color:var(--fb-label2)}
 .fb-statebar{margin:0 0 18px;padding:12px 14px;border:1px solid var(--fb-warnborder);border-radius:var(--fb-radius);background:var(--fb-warnbg);color:var(--fb-label);font-size:13px;line-height:1.7}
 .fb-statebar b{color:var(--fb-warn)}
-.fb-mode-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:10px}
+.fb-mode-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:10px}
 .fb-mode-card{padding:12px 14px;border:1px solid var(--fb-border1);border-radius:var(--fb-radius);background:#fff;cursor:pointer;text-align:left}
 .fb-mode-card.on{border-color:var(--fb-brand);background:#f5f9ff}
 .fb-mode-card strong{display:block;font-size:13.5px;font-weight:600}
@@ -404,16 +404,16 @@ function installDataClient(React, ctx, component) {
       }, ...(paths[kind] || []))
     }
 
-    function StomachTasks() {
+    function StomachTasks({ analysisTarget }) {
       const [task, setTask] = useState(null), [caps, setCaps] = useState(null), [deps, setDeps] = useState(null), [unknowns, setUnknowns] = useState(null), [unknownsOpen, setUnknownsOpen] = useState(false)
       const [analyses, setAnalyses] = useState([]), [tasks, setTasks] = useState([]), [analysisOffset, setAnalysisOffset] = useState(null), [taskOffset, setTaskOffset] = useState(null)
       const [analysisId, setAnalysisId] = useState(''), [taskId, setTaskId] = useState(''), [sourcePath, setSourcePath] = useState(''), [initialId, setInitialId] = useState('')
-      const [mode, setMode] = useState('compatibility'), [busy, setBusy] = useState(false), [issue, setIssue] = useState(''), [notice, setNotice] = useState('')
+      const [mode, setMode] = useState('compatibility'), [modeNote, setModeNote] = useState(''), [busy, setBusy] = useState(false), [issue, setIssue] = useState(''), [notice, setNotice] = useState('')
       const [technical, setTechnical] = useState(false), [output, setOutput] = useState(null), [outputRevision, setOutputRevision] = useState('')
       const [judgment, setJudgment] = useState('unknown'), [reason, setReason] = useState('')
       const [editing, setEditing] = useState(null), [decision, setDecision] = useState('pending'), [depReason, setDepReason] = useState('')
       const [change, setChange] = useState(''), [semantic, setSemantic] = useState('unknown'), [accept, setAccept] = useState(false)
-      const labels = { compatibility: '兼容拆分', reverse: '逆向拆分', tool: '工具类', brain: '脑区类', mixed: '混合类', unknown: '待判断',
+      const labels = { off: '关闭胃', compatibility: '兼容拆分', reverse: '逆向拆分', tool: '工具类', brain: '脑区类', mixed: '混合类', unknown: '待判断',
         'selection-pending': '待选择功能', 'plan-pending': '方案待讨论', 'plan-awaiting-confirmation': '方案待确认 / 待执行', 'materials-produced': '源码材料已产出',
         'confirmed-with-open-questions': '已记录确认，仍有待定项', 'confirmed-awaiting-separate-execution': '已确认，执行另行授权', 'materials-confirmed': '源码材料已确认',
         'model-reviewed-awaiting-user': '已记录模型意见，待用户确认', implementation: '直接实现候选', 'shared-state-initialization': '共享服务、状态与初始化',
@@ -443,6 +443,17 @@ function installDataClient(React, ctx, component) {
         return value.result
       }
       async function run(fn) { if (busy) return; setBusy(true); setIssue(''); setNotice(''); try { await fn() } catch (e) { setIssue(e.message) } finally { setBusy(false) } }
+      const modeValues = ['off', 'compatibility', 'reverse']
+      async function persistMode(value) {
+        try {
+          const response = await fetch('/api/fish-body/state', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ defaultMode: value }) })
+          if (!response.ok) throw Error('HTTP ' + response.status)
+          const saved = await response.json()
+          if (saved && saved.error) throw Error(saved.error)
+        } catch (e) {
+          setModeNote('模式已在本次会话切换，但未能持久保存（' + e.message + '）；重载后可能回到上次保存的模式。')
+        }
+      }
       async function list(kind, offset = 0) {
         const r = await api({ taskOperation: 'list', ...(kind === 'analyses' ? { taskView: 'analyses' } : {}), taskOptions: { offset, limit: 20 } })
         const put = kind === 'analyses' ? setAnalyses : setTasks
@@ -452,12 +463,27 @@ function installDataClient(React, ctx, component) {
       function chooseAnalysis(id, row = analyses.find(a => a.id === id)) {
         setAnalysisId(id); setInitialId(row?.kind === 'initial' ? id : row?.kind === 'deep' ? row.initialAnalysisId || '' : '')
       }
-      useEffect(() => { run(() => Promise.all([list('analyses'), list('tasks')])) }, [])
+      useEffect(() => {
+        run(() => Promise.all([list('analyses'), list('tasks')]))
+        /* 重载读回持久化的默认工作模式；仅接受契约三值，失败保持内存默认不变。 */
+        fetch('/api/fish-body/state', { credentials: 'same-origin', cache: 'no-store' })
+          .then(r => r.ok ? r.json() : null)
+          .then(v => {
+            const saved = v && (v.defaultMode ?? v.mode)
+            if (modeValues.includes(saved) && !task) setMode(saved)
+          })
+          .catch(() => {})
+      }, [])
+      /* 手页「从已装项进入分析」成功后：按 nonce 变化回跳并 load 新建的同一任务/插件。 */
+      useEffect(() => {
+        if (!analysisTarget || !analysisTarget.taskId) return
+        run(() => load(analysisTarget.taskId))
+      }, [analysisTarget?.nonce])
       async function readPage(id, view, offset = 0) { return (await api({ taskOperation: 'read', taskId: id, taskView: view, taskOptions: { offset, limit: 5 } })).page }
       async function load(id) {
         if (!id) throw Error('尚未选择任务，请先从列表中选择。')
         const t = await api({ taskOperation: 'read', taskId: id })
-        setTask(t); setTaskId(id); setMode(t.mode); chooseAnalysis(t.analysisId, { kind: t.analysisKind, initialAnalysisId: t.initialAnalysisId }); setOutput(null); setOutputRevision(''); setEditing(null)
+        setTask(t); setTaskId(id); chooseAnalysis(t.analysisId, { kind: t.analysisKind, initialAnalysisId: t.initialAnalysisId }); setOutput(null); setOutputRevision(''); setEditing(null)
         setJudgment(t.judgment?.value || 'unknown'); setReason(t.judgment?.origin?.reason || '')
         setCaps(await readPage(id, 'capabilities')); setDeps(null); setUnknowns(null)
       }
@@ -477,7 +503,13 @@ function installDataClient(React, ctx, component) {
         return h('section', null, h('h4', null, title), rows.length ? h('ul', null, rows.map(f => h('li', { key: f.id }, f.annotation?.label || f.name, f.annotation ? h('p', { className: 'fb-note' }, '模型理由：' + f.annotation.reason) : null))) : h('p', { className: 'fb-note' }, key === 'retained' ? '尚未选择，请在下方勾选要保留的功能。' : '当前没有排除的功能候选。'), total > rows.length ? h('p', { className: 'fb-note' }, '共 ' + total + ' 项，完整功能请按下方分页查看。') : null)
       }
       async function readOutput(offset = 0, revision = outputRevision) { setOutput(await api({ taskOperation: 'output', taskId: task.taskId, ...(revision ? { outputRevision: Number(revision) } : {}), taskOptions: { offset, limit: 5 } })) }
-      const modeChoices = h('fieldset', { disabled: busy, className: 'fb-task-modes' }, h('legend', null, '任务模式'), ['compatibility', 'reverse'].map(m => h('label', { key: m }, h('input', { type: 'radio', name: 'stomach-mode', checked: mode === m, onChange: () => task ? run(() => update({ mode: m })) : setMode(m) }), labels[m])))
+      const chooseMode = (value) => {
+        if (value === mode) return
+        setMode(value)
+        setModeNote('已切换为「' + labels[value] + '」；只影响之后新建的任务，当前已打开任务不变。' + (value === 'off' ? ' 关闭胃后新安装/更新直接交由 DSH 原生处理，不建分析任务。' : ''))
+        persistMode(value)
+      }
+      const modeChoices = h('fieldset', { disabled: busy, className: 'fb-task-modes' }, h('legend', null, '新任务模式（只影响新请求）'), ['off', 'compatibility', 'reverse'].map(m => h('label', { key: m }, h('input', { type: 'radio', name: 'stomach-mode', checked: mode === m, onChange: () => chooseMode(m) }), labels[m])))
       const statusText = task ? (labels[task.status] || labels[task.phase] || String(task.status || task.phase || '未确认')) : '未选择任务'
       const incomplete = !!task && (/partial|未完成|diagnostic-partial/.test(String(task.status || task.phase || '')) || task.completeness === false || task.completeness?.complete === false)
       const flow = ['1 选择插件', '2 查看功能', '3 讨论取舍', '4 查看方案', '5 查看产出']
@@ -529,7 +561,7 @@ function installDataClient(React, ctx, component) {
           h('div', { className: 'fb-item-head' },
             h('strong', null, task ? nameOf(task) : '尚未选择插件任务'),
             h(Tag, { tone: incomplete ? 'err' : task ? 'warn' : '' }, statusText),
-            task ? h(Tag, { tone: null }, labels[task.mode] || task.mode) : null),
+            task ? h(Tag, { tone: null, title: '该任务自身模式（只读，不影响新任务默认）' }, '任务模式·' + (labels[task.mode] || task.mode)) : null),
           h('div', { className: 'fb-steps' }, flow.map((step, i) => h('span', { key: step, className: 'fb-step' + (i === flowIndex ? ' on' : '') }, step))),
           task ? h('div', { className: 'fb-actions' }, button('刷新任务状态', () => load(task.taskId))) : h('div', { className: 'fb-actions' },
             button('刷新列表', () => Promise.all([list('analyses'), list('tasks')])),
@@ -541,7 +573,8 @@ function installDataClient(React, ctx, component) {
               out.push(h('span', { className: 'fb-v', key: 'v' + i }, node))
               return out
             }, [])),
-            h('div', { className: 'fb-actions' }, button('用所选分析新建任务', async () => {
+            h('div', { className: 'fb-actions' }, button(mode === 'off' ? '关闭胃模式不建分析任务' : '用所选分析新建任务', async () => {
+              if (mode === 'off') throw Error('当前为「关闭胃」模式：新安装与更新直接交由 DSH 原生处理，不建分析任务；如需分析请切换为兼容拆分或逆向拆分。')
               if (!analysisId) throw Error('尚未选择分析结果，请先从列表中选择。')
               const r = await api({ taskOperation: 'create', analysisId, taskMode: mode })
               await load(r.taskId); await list('tasks')
@@ -575,15 +608,17 @@ function installDataClient(React, ctx, component) {
             h('details', null, h('summary', null, '讨论提示（仅复制，不发送）'), h('p', null, task.conversation.prompt))),
           h(Foot, null, '鱼的脑是独立设置项，不并入身体页面。 · 本次未完成的结果暂不可据此下结论；确认与安装由用户另行决定。')) : null,
         h('section', { className: 'fb-sec fb-stomach-full' },
-          h('h3', null, '当前模式'),
-          h('div', { className: 'fb-mode-grid' }, [['compatibility', '兼容拆分', '保留选定功能，并拟定与已有组件的适配方案。'], ['reverse', '逆向拆分', '理解并提取组件实现与依赖；后续开发由用户或模型另行决定。']].map(([value, title, desc]) =>
+          h('h3', null, '工作模式 · 新任务默认'),
+          h('p', { className: 'fb-note' }, '选择只作用于之后新建的任务，不改变当前已打开任务的模式。' + (mode === 'off' ? ' 关闭胃：新安装与更新直接交由 DSH 原生处理，不做分析、不改身体总开关。' : '')),
+          modeNote ? h('p', { className: 'fb-note', role: 'status' }, modeNote) : null,
+          h('div', { className: 'fb-mode-grid' }, [['off', '关闭胃', '新安装与更新直接交由 DSH 原生处理，跳过分析；零胃分析、零模型请求。身体总开关不受影响。'], ['compatibility', '兼容拆分', '保留选定功能，并拟定与已有组件的适配方案。'], ['reverse', '逆向拆分', '理解并提取组件实现与依赖；后续开发由用户或模型另行决定。']].map(([value, title, desc]) =>
             h('button', { key: value, type: 'button', className: 'fb-mode-card' + (mode === value ? ' on' : ''), disabled: busy,
-              onClick: () => task ? run(() => update({ mode: value })) : setMode(value) },
+              'aria-pressed': mode === value, onClick: () => chooseMode(value) },
               h('strong', null, title, mode === value ? h(Tag, { tone: 'info' }, '当前选择') : null),
               h('span', null, desc))))),
         h('section', { className: 'fb-sec fb-stomach-full' },
           h('h3', null, '本次目标'),
-          h('div', { className: 'fb-lead' }, explanation?.goal || '待当前 DSH 对话了解你的功能目标。当前模式：' + labels[task?.mode || mode] + '。'),
+          h('div', { className: 'fb-lead' }, explanation?.goal || '待当前 DSH 对话了解你的功能目标。新任务默认模式：' + labels[mode] + '。'),
           task ? h('p', { className: 'fb-note' }, '整体分类：' + labels[task.classification.value] + '（程序候选，尚非语义结论）' + (task.judgment ? '；已记录' + (task.judgment.origin.kind === 'current-model' ? '模型' : '用户') + '判断：' + labels[task.judgment.value] : '；待当前对话讨论。')) : null),
         task ? h('section', { className: 'fb-sec fb-stomach-full' },
           h('h3', null, '当前保留的功能 — 做什么 / 怎么用 / 得到什么'),
@@ -791,7 +826,7 @@ function installDataClient(React, ctx, component) {
         h('section', { className: 'fb-sec' },
           h('h3', null, '用户下一步做什么'),
           h('ol', { className: 'fb-next' },
-            h('li', null, '在「饭·来源」核对已保存的来源材料，作为分析输入。'),
+            h('li', null, '在「饭·来源」核对已登记的来源与材料，作为分析输入；未采材料的来源不会标成已保存。'),
             h('li', null, '在「胃·分析」选择已有任务或分析结果，查看功能取舍与方案进度。'),
             h('li', null, '在「手·组件」查看登记与原生状态；是否启用由你在原生插件开关中决定。'))),
         h('section', { className: 'fb-sec' },
@@ -848,6 +883,19 @@ function installDataClient(React, ctx, component) {
       const compareText = { newer: '有新版', same: '已是最新', localNewer: '本地较新', unknown: '版本关系未确认' }
       const sourceLabel = type => ({ github: 'GitHub 仓库', local: '本地材料', remote: '远端仓库', npm: 'npm 包' }[String(type || '').toLowerCase()] || '来源材料')
       const sourceTone = type => ({ github: 'info', npm: 'info', local: '', remote: '' }[String(type || '').toLowerCase()] || '')
+      /* 来源登记状态（纵向链四值）：未采材料绝不显示"已保存材料"。兼容 item 顶层/source/_meta 三种落点。 */
+      const STATUS_TEXT = { collected: '已保存材料', 'downloaded-pinned': '已固定原包', 'registration-only': '来源已登记（未采材料）', 'material-absent': '材料未采集' }
+      const statusTone = { collected: 'ok', 'downloaded-pinned': 'info', 'registration-only': 'warn', 'material-absent': 'warn' }
+      const statusOf = x => {
+        const raw = x && (x.sourceStatus ?? x.source?.sourceStatus ?? x._meta?.sourceStatus)
+        const key = String(raw || '').toLowerCase()
+        return STATUS_TEXT[key] ? key : ''
+      }
+      const hasMaterial = key => key === 'collected' || key === 'downloaded-pinned'
+      const statusTag = x => {
+        const key = statusOf(x)
+        return key ? h(Tag, { tone: statusTone[key] || '' }, STATUS_TEXT[key]) : null
+      }
       const isFailedResult = r => !r || ['error', 'unavailable', 'incomparable', 'historical'].includes(r.state)
       const rememberResult = (id, result) => {
         const failed = isFailedResult(result)
@@ -980,10 +1028,14 @@ function installDataClient(React, ctx, component) {
         if (m) return 'gh:' + m[1] + '/' + m[2] + (m[3] ? '#' + encodeURIComponent(m[3]) : '')
         return 'solo:' + String(x.id || '')
       }
+      // #324 一插件一卡：后端 displayKey（核实包名归一，跨 GitHub 实际 / npm 声明 / 市场记录 / 多版本 commit）优先，
+      // 把同一插件的多条来源记录并成一张展示卡；无包名（本地/solo）与旧数据走后端身份键或 id 单列。
+      // 每条 row 自带的 groupKey/identityBasis/install 全部原样保留，详情里逐条分述，不因归一展示冒充同源或当前安装来源。
+      const displayKeyOf = x => (x && x.displayKey ? String(x.displayKey) : deriveGroupKey(x))
       const groups = []
       const indexByKey = new Map()
       for (const x of (items || [])) {
-        const key = deriveGroupKey(x)
+        const key = displayKeyOf(x)
         if (!indexByKey.has(key)) {
           indexByKey.set(key, groups.length)
           groups.push({ key, rows: [] })
@@ -1009,7 +1061,12 @@ function installDataClient(React, ctx, component) {
           const src = install.source || installedChannel(install) || ''
           return h(Tag, { tone: 'ok' }, '当前安装 ' + v + (src ? ' · ' + src : ''))
         }
-        if (install.state === 'unconfirmed') return h(Tag, { tone: 'warn' }, '当前安装来源未确认')
+        // #324 已装事实与来源核实分离：内容等价多条历史会把来源降为 unconfirmed，
+        // 但 node_modules 里确有新装版本（install.version 带值），照实显示"已装 X + 来源未确认"。
+        if (install.state === 'unconfirmed') {
+          const v = install.version || install.installedVersion || ''
+          return h(Tag, { tone: 'warn' }, v ? '当前已装 ' + v + '（来源未确认）' : '当前安装来源未确认')
+        }
         if (install.state === 'not-installed') return h(Tag, { tone: 'info' }, '未安装')
         return h(Tag, { tone: 'info' }, '安装状态未确认')
       }
@@ -1041,7 +1098,7 @@ function installDataClient(React, ctx, component) {
             h('button', { type: 'button', className: 'fb-tab fb-primary', onClick: () => check(item.id, true) }, '重新检查'),
             h(Tech, { title: '查看错误详情' }, h('pre', { className: 'fb-task-output' }, JSON.stringify(r, null, 2)))))
         const cmp = r.comparison || 'unknown'
-        const target = compareTarget || '保存材料'
+        const target = compareTarget || '本地来源'
         if (cmp === 'newer') {
           const updateUrl = item.remoteUrl || item.url || r.remoteUrl || r.url || ''
           return h('div', { className: 'fb-verbox' },
@@ -1106,6 +1163,10 @@ function installDataClient(React, ctx, component) {
       const channelLabel = { github: 'GitHub 来源', npm: 'npm 来源', local: '本地材料' }
       const installedSourceId = install => String(install?.sourceId || install?.sourceItemId || install?.materialId || '')
       const installedChannel = install => {
+        // #330 直装登记真实渠道优先：direct-registration 的 source='direct-registration'、sourceId='local:...'，
+        // 旧文本判定会误命中 local；用后端 directRegistration.sourceKind（npm/github）还原真实来源渠道。
+        const dk = String(install?.directRegistration?.sourceKind || '').toLowerCase()
+        if (dk === 'npm' || dk === 'github') return dk
         const sid = installedSourceId(install)
         const raw = String(install?.source || '').toLowerCase()
         if (raw.includes('github') || /^github\.com\//i.test(sid)) return 'github'
@@ -1127,7 +1188,13 @@ function installDataClient(React, ctx, component) {
         for (const row of group.rows) {
           const fromResult = checks[row.id]?.result?.install
           const inline = row._install?.state ? row._install : (row.install?.state === 'installed' ? row.install : null)
-          for (const ins of [fromResult, inline]) {
+          // #330b：check-version 返回的 install 缺 directRegistration（渠道显示字段），从同 row 的 inline install 浅挂补齐；
+          // fromResult 其余字段一律不动、仍优先选用；只补渠道显示，不改安装/注册/身份判定，不触碰 checks 原对象。
+          let effectiveFromResult = fromResult
+          if (fromResult?.state === 'installed' && !fromResult.directRegistration && inline?.directRegistration) {
+            effectiveFromResult = { ...fromResult, directRegistration: inline.directRegistration }
+          }
+          for (const ins of [effectiveFromResult, inline]) {
             if (ins?.state !== 'installed') continue
             const sid = installedSourceId(ins)
             const exact = sid ? byId.get(sid) : null
@@ -1182,7 +1249,8 @@ function installDataClient(React, ctx, component) {
       const segLabel = { github: 'GitHub 仓库', npm: 'npm' }
       const groupNameOf = group => {
         const head = group.rows[0] || {}
-        return String(head.groupName || packageNameOf(head) || displayName(head) || '未命名来源')
+        // #324 一卡一名：优先后端新增的核实包名（displayKey 即按它归一），避免取到组内 fork 行的仓库名。
+        return String(head.packageName || head.groupName || packageNameOf(head) || displayName(head) || '未命名来源')
       }
       const installOf = group => {
         const cs = currentSourceOf(group)
@@ -1247,10 +1315,16 @@ function installDataClient(React, ctx, component) {
         if (node && typeof node.focus === 'function') node.focus()
       }
       const installLine = install => {
-        if (!install || install.state !== 'installed') return install && install.state === 'unconfirmed' ? '当前安装来源未确认' : '未安装'
+        if (!install) return '未安装'
+        const ver = install.version || install.installedVersion || ''
+        // #324 已装事实与来源核实分离：unconfirmed 也可能带真实已装版本（内容等价历史），
+        // 如实显示"已装 X（来源未确认，存在内容等价历史记录）"，不再只报"来源未确认"掩盖已装事实。
+        if (install.state === 'unconfirmed') {
+          return ver ? '当前已装 ' + ver + '（来源未确认，存在内容等价历史记录）' : '当前安装来源未确认'
+        }
+        if (install.state !== 'installed') return '未安装'
         const ch = installedChannel(install)
-        const ver = install.version || install.installedVersion || '版本未记录'
-        return (ch ? segLabel[ch] || channelLabel[ch] : install.source || '来源') + ' · ' + ver + '（当前安装）'
+        return (ch ? segLabel[ch] || channelLabel[ch] : install.source || '来源') + ' · ' + (ver || '版本未记录') + '（当前安装）'
       }
       // 版本结论正文：默认可见远端版本/中文结论/当前安装比较，技术细节才折叠（#283-1）
       const versionSummary = entry => {
@@ -1272,7 +1346,8 @@ function installDataClient(React, ctx, component) {
           if (r.lastSuccessAt) rows.push(['上次成功时间', r.lastSuccessAt])
         } else if (r) {
           rows.push(['远端版本', r.remoteVersion || '未取得'])
-          rows.push(['版本结论', compareText[r.comparison] || '版本关系未确认'])
+          // #324 材料来源的版本结论：只是「所看渠道这份材料 vs 远端」，不是当前安装版升级信号。
+          rows.push(['该来源版本结论', (compareText[r.comparison] || '版本关系未确认') + '（仅该来源材料，非安装升级）'])
         } else {
           rows.push(['版本结论', '尚未检查，未确认是否最新'])
         }
@@ -1284,24 +1359,56 @@ function installDataClient(React, ctx, component) {
           (c && c.error) || failedState ? h('p', { className: 'fb-note' }, '上面的远端版本不是本次结论；本次未确认。') : null,
           h(Tech, { title: '版本检查技术细节（后端原始数据）' }, renderCheck(row, '保存材料')))
       }
+      // #324 一插件一卡后，详情要逐条列组内全部来源/版本：当前安装版本单列，其余标历史来源，逐条带身份依据与材料状态。
+      const versionRowsOf = entry => {
+        const cs = currentSourceOf(entry.group)
+        // #324 已装事实兜底：内容等价历史会把来源降为 unconfirmed，currentSourceOf 只认 installed；
+        // 首行"当前安装版本"改用 installOf（含 unconfirmed 带真实版本），避免与"实际安装"KV 自相矛盾。
+        const ins = cs?.install || installOf(entry.group)
+        const curId = cs?.row?.id || installedSourceId(ins)
+        const iv = ins?.installedVersion || ins?.version
+        const rows = [[
+          '当前安装版本',
+          iv ? iv + (cs?.row ? '（对应来源 ' + displayName(cs.row) + '，' + (cs.basis || '安装映射已确认') + '）' : (ins?.state === 'unconfirmed' ? '（来源未确认，存在内容等价历史记录）' : '')) : '未确认当前安装版本'
+        ]]
+        for (const r of entry.group.rows) {
+          const isCur = !!curId && String(r.id || '') === String(curId)
+          rows.push([
+            (isCur ? '当前安装对应来源 · ' : '历史来源 · ') + displayName(r),
+            sourceLabel(r.sourceType) + ' · ' + (r.localVersion || '版本未记录') + ' · 身份依据 ' + String(r.identityBasis || 'unconfirmed') + ' · ' + (STATUS_TEXT[statusOf(r)] || '来源已登记')
+          ])
+        }
+        return rows
+      }
       const stateTag = entry => {
-        if (entry.group.key.startsWith('solo:') || entry.group.rows.some(r => r.identityBasis === 'unconfirmed') || !packageNameOf(entry.group.rows[0]))
-          return h(Tag, { tone: 'warn' }, '来源关联未确认')
-        // 只按当前所看渠道的代表材料（current）的有效检查表达状态；不拿同组其它渠道/历史的 newer 冒充本渠道更新
-        const curCheck = checks[entry.info.current?.id]
+        const cur = entry.info.current
+        const sKey = statusOf(cur)
+        // 来源已登记但未采材料：如实显示，绝不冒充"材料已就绪/已保存材料"
+        if (sKey && !hasMaterial(sKey)) return h('span', null, statusTag(cur), h(Tag, { tone: 'warn' }, '未采集分析材料'))
+        // #324 一插件一卡后组内可能混多条来源：身份是否核实按"组内是否有任一核实包名 + 是否 fork 自证"判断，
+        // 不再用首条（可能是 solo 历史）一票否决整卡；fork 自证行仍在详情逐条标注，不冒充已确认同源。
+        const verifiedName = entry.group.rows.some(r => packageNameOf(r))
+        const hasUnverified = entry.group.rows.some(r => r.identityBasis === 'unconfirmed')
+        if (!verifiedName) return h(Tag, { tone: 'warn' }, '来源关联未确认')
+        // 卡级"有新版本"只认当前安装版比较（install.comparison）；所看材料行的 newer 只在版本结论里标"非安装升级"，
+        // 绝不把历史材料/其它渠道的 newer 冒成"当前插件待升级"（#324）。
+        const cs = currentSourceOf(entry.group)
+        const instCmp = installComparisonOf(entry.group, cs)
+        if (cs && instCmp === 'newer') return h(Tag, { tone: 'warn' }, '当前安装版有新版本')
+        const curCheck = checks[cur?.id]
         if (curCheck?.result && ['historical', 'error', 'unavailable', 'incomparable'].includes(curCheck.result.state))
           return h(Tag, { tone: 'warn' }, '版本未确认')
-        if (curCheck?.result?.comparison === 'newer') return h(Tag, { tone: 'warn' }, '有新版本 · 与保存材料比较')
-        return h(Tag, { tone: 'ok' }, '材料已就绪')
+        if (hasUnverified) return h(Tag, { tone: 'warn' }, '含未核实来源（详见版本记录）')
+        return h(Tag, { tone: 'ok' }, '来源已核实')
       }
       return h('div', { className: 'fb-page' },
         h('div', { className: 'fb-lead' }, '这一页保存插件的原始源码与来源材料，作为「胃」分析的输入；',
-          h('b', null, '材料已保存 ≠ 已安装 ≠ 安全'), '，是否安装、是否信任由用户在别处决定。本页列表只读，不下载、不执行脚本、不安装。'),
+          h('b', null, '来源已登记 ≠ 材料已保存 ≠ 已安装 ≠ 安全'), '，是否安装、是否信任由用户在别处决定。本页列表只读，不下载、不执行脚本、不安装。'),
         issue ? h('div', null, h('p', { className: 'fb-error', role: 'alert' }, '来源列表读取失败：' + issue), h(Retry, { onRetry: () => setRetryKey(k => k + 1) })) : null,
         !issue && !items ? h('p', { className: 'fb-note', role: 'status' }, '正在读取来源…') : null,
         !issue && items && !items.length ? h('div', { className: 'fb-note-box' }, '暂无已登记来源。') : null,
         items && items.length ? h('section', { className: 'fb-sec' },
-          h('h3', null, '已保存的材料（点选查看）'),
+          h('h3', null, '来源与材料（点选查看）'),
           h('div', { className: 'fb-rice-tool' },
             h('div', { className: 'fb-seg', role: 'tablist', 'aria-label': '来源渠道' },
               h('button', {
@@ -1332,7 +1439,7 @@ function installDataClient(React, ctx, component) {
                 onClick: () => selectEntry(viewChannel, e.groupKey)
               },
                 h('div', { className: 'fb-rice-item-nm' }, e.name),
-                h('div', { className: 'fb-rice-item-sf' }, (e.info.current.localVersion ? e.info.current.localVersion + ' · ' : '') + '已保存'))) : null),
+                h('div', { className: 'fb-rice-item-sf' }, (e.info.current.localVersion ? e.info.current.localVersion + ' · ' : '') + (STATUS_TEXT[statusOf(e.info.current)] || '来源已登记')))) : null),
             pickedEntry ? h('div', { className: 'fb-rice-detail' },
               h('div', { className: 'fb-rice-detail-h' },
                 h('h4', null, pickedEntry.name), stateTag(pickedEntry)),
@@ -1340,14 +1447,30 @@ function installDataClient(React, ctx, component) {
                 ['名称', pickedEntry.name],
                 ['所看渠道', segLabel[viewChannel] + '（仅查看该渠道材料，不代表安装切换）'],
                 ['实际安装', installLine(pickedEntry.install)],
-                ['材料版本', pickedEntry.info.current.localVersion || '未记录'],
+                ['来源登记状态', STATUS_TEXT[statusOf(pickedEntry.info.current)] || '来源已登记（未采材料）'],
+                ['材料版本', hasMaterial(statusOf(pickedEntry.info.current)) ? (pickedEntry.info.current.localVersion || '未记录') : '未采集分析材料'],
                 ['来源', sourceLabel(pickedEntry.info.current.sourceType) + '（' + pickedEntry.info.label + '）']
               ] }),
               versionSummary(pickedEntry),
-              h('p', { className: 'fb-note' }, '当前所看渠道只影响这里显示哪份材料，不切换安装来源。材料已保存 ≠ 已安装 ≠ 安全。'),
+              // #324 一插件一卡：组内多来源/多版本在详情逐条列清，当前安装与历史分开，不冒充同源也不漏历史。
+              pickedEntry.group.rows.length > 1 ? h('div', { className: 'fb-ver-main' },
+                h('p', { className: 'fb-et' }, '该插件登记的版本与来源（当前安装 / 历史）'),
+                h(KV, { rows: versionRowsOf(pickedEntry) })) : null,
+              h('p', { className: 'fb-note' }, '当前所看渠道只影响这里显示哪份材料，不切换安装来源。来源已登记 ≠ 材料已保存 ≠ 已安装 ≠ 安全。', h('br'), '如需按已装版本采集并进入分析，请到「手·组件」页从已装项进入分析（显式分析请求）。'),
               h('div', { className: 'fb-actions' },
-                sectionPath ? h('button', { type: 'button', className: 'fb-tab', disabled: pendingOpen, onClick: open }, pendingOpen ? '正在打开…' : '打开材料目录（唯一入口）') : null,
-                typeof onNavigate === 'function' ? h('button', { type: 'button', className: 'fb-tab', onClick: () => onNavigate('stomach') }, '到胃·分析查看') : null,
+                // #324 未采材料行不引导到不存在的材料目录：禁用并如实标注；已采材料才给唯一入口。
+                sectionPath ? h('button', {
+                  type: 'button', className: 'fb-tab',
+                  disabled: pendingOpen || !hasMaterial(statusOf(pickedEntry.info.current)),
+                  title: hasMaterial(statusOf(pickedEntry.info.current)) ? undefined : '该来源只登记了来源，未采集分析材料，无可打开的材料目录',
+                  onClick: open
+                }, pendingOpen ? '正在打开…' : (hasMaterial(statusOf(pickedEntry.info.current)) ? '打开材料目录（唯一入口）' : '材料未采集，无可打开目录')) : null,
+                // #327-2 如实导航：本页不预先采集/不宣称已进入分析；已装项显式分析入口在「手·组件」页。
+                typeof onNavigate === 'function' ? h('button', {
+                  type: 'button', className: 'fb-tab',
+                  title: '跳转到胃工作区；按需采集与分析由显式分析请求完成，本页不预先采集',
+                  onClick: () => onNavigate('stomach')
+                }, '到胃工作区查看/分析 →') : null,
                 pickedEntry.info.current.hasRemote ? h('button', { type: 'button', className: 'fb-tab', disabled: !!checks[pickedEntry.info.current.id]?.pending, onClick: () => check(pickedEntry.info.current.id, true) }, checks[pickedEntry.info.current.id]?.pending ? '正在检查…' : '重新检查') : null),
               openIssue ? h('p', { className: 'fb-error', role: 'alert' }, openIssue) : null,
               pickedEntry.info.history.length ? h(Tech, { title: '该渠道历史记录（' + pickedEntry.info.history.length + '，折叠）' }, pickedEntry.info.history.map(x => sourceRow(x, '保存材料'))) : null,
@@ -1366,7 +1489,7 @@ function installDataClient(React, ctx, component) {
         h(Foot, null, '鱼的脑是独立设置项，不并入身体页面。 · 本页只读取来源目录与后端版本结论，不下载、不安装、不分析；检查按钮不代表安装授权。'))
     }
 
-    function HandPanel({ onOpenFolder, sectionPath }) {
+    function HandPanel({ onOpenFolder, sectionPath, onNavigate, onAnalysisReady }) {
       const [items, setItems] = useState(null)
       const [issue, setIssue] = useState('')
       const [gap, setGap] = useState(null)
@@ -1375,6 +1498,8 @@ function installDataClient(React, ctx, component) {
       const [retryKey, setRetryKey] = useState(0)
       const [openIssue, setOpenIssue] = useState('')
       const [pendingOpen, setPendingOpen] = useState(false)
+      const [analysisIntent, setAnalysisIntent] = useState('')
+      const [analysisOps, setAnalysisOps] = useState({})
       const liveRef = useRef(true)
       useEffect(() => { liveRef.current = true; return () => { liveRef.current = false } }, [retryKey])
       const refresh = () => {
@@ -1421,6 +1546,25 @@ function installDataClient(React, ctx, component) {
         } catch (error) { if (liveRef.current) setOpenIssue(error.message) }
         finally { if (liveRef.current) setPendingOpen(false) }
       }
+      /* 从已装项进入分析：显式请求，携带当前插件/已装版本/来源身份；不切插件、不改 items 标记、不动全局 mode。 */
+      const enterAnalysis = async (item, mode) => {
+        if (!onAnalysisReady || analysisOps[item.pluginId]?.pending) return
+        if (mode !== 'compatibility' && mode !== 'reverse') return
+        setAnalysisOps(old => ({ ...old, [item.pluginId]: { pending: true, error: '' } }))
+        try {
+          const value = await fetchJson('/api/fish-body/analyze-installed', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ pluginId: item.pluginId, nativeId: item.nativeId, packageName: item.packageName || undefined, mode })
+          })
+          if (value?.ok === false) throw Error(value.error || value.message || value.reason || '进入分析失败。')
+          const taskId = value?.taskId || ''
+          if (!taskId) throw Error(value?.analysisId ? '分析已创建，但未返回任务编号，请在列表选择对应任务。' : '服务未返回任务编号，请重试。')
+          setAnalysisIntent('')
+          if (liveRef.current) onAnalysisReady({ taskId, analysisId: value.analysisId || '', pluginId: value.pluginId || item.pluginId })
+        } catch (error) {
+          if (liveRef.current) setAnalysisOps(old => ({ ...old, [item.pluginId]: { pending: false, error: error.message || '进入分析失败。' } }))
+        }
+      }
       const groups = {}
       for (const item of (items || [])) { const key = item.pluginId || '未标注插件'; (groups[key] = groups[key] || []).push(item) }
       const runtimeLabel = { unknown: '暂无反馈', running: '正在运行', stopped: '已停止', error: '加载或运行失败' }
@@ -1453,7 +1597,7 @@ function installDataClient(React, ctx, component) {
       }
       return h('div', { className: 'fb-page' },
         h('div', { className: 'fb-statebar' },
-          h('b', null, '状态口径：'), '已登记 ≠ 已安装 ≠ 已加载 ≠ 实测可用。原生桥未挂上或服务未知时显示「无法核实 / 未知 / 暂无反馈」，不把它写成「未安装」；没有运行证据的组件不声称可用。'),
+          h('b', null, '状态口径：'), '原生安装 · 未拆分（从已装 DSH 插件识别，本页不做拆分）；已登记 ≠ 已安装 ≠ 已启用 ≠ 已加载 ≠ 实测可用。原生桥未挂上或服务未知时显示「无法核实 / 未知 / 暂无反馈」，不把它写成「未安装」；没有运行证据的组件不声称可用。身体总开关独立于「关闭胃」：关闭胃不影响本页原生安装状态与加载。'),
         gap ? h('div', { className: 'fb-warnbox', role: 'status' },
           h('strong', null, '原生启停接口缺口 · 无法核实'),
           h('p', null, '当前宿主未提供可核实的原生插件启停接口，因此不提供启停按钮；下方状态只反映已登记与可核实信息，不代表正在运行。'),
@@ -1505,6 +1649,18 @@ function installDataClient(React, ctx, component) {
                       h('button', { type: 'button', className: 'fb-tab', disabled: op.pending || item.enabled === true, onClick: () => toggle(item, true) }, op.pending ? '操作中…' : '启动'),
                       h('button', { type: 'button', className: 'fb-tab', disabled: op.pending || item.enabled === false, onClick: () => toggle(item, false) }, op.pending ? '操作中…' : '关闭'))
                       : h('p', { className: 'fb-note' }, whyNo),
+                    item.installed === true && typeof onAnalysisReady === 'function' ? h('div', { className: 'fb-analysis-entry' },
+                      h('p', { className: 'fb-note' },
+                        '此项为原生安装 · 未拆分，当前不自动分析。',
+                        h('button', { type: 'button', className: 'fb-tab', 'aria-expanded': analysisIntent === item.pluginId, disabled: !!analysisOps[item.pluginId]?.pending, onClick: () => setAnalysisIntent(analysisIntent === item.pluginId ? '' : item.pluginId) }, analysisIntent === item.pluginId ? '收起' : '从已装项进入分析 →')),
+                      analysisIntent === item.pluginId ? h('div', { className: 'fb-analysis-modes' },
+                        h('p', { className: 'fb-note' }, '显式分析请求：将按该插件已装版本的来源获取材料并进入分析；不会切换或改动已装插件，也不给其它组件打标。'),
+                        h('div', { className: 'fb-actions' },
+                          h('button', { type: 'button', className: 'fb-tab', disabled: !!analysisOps[item.pluginId]?.pending, onClick: () => enterAnalysis(item, 'compatibility') }, '兼容拆分'),
+                          h('button', { type: 'button', className: 'fb-tab', disabled: !!analysisOps[item.pluginId]?.pending, onClick: () => enterAnalysis(item, 'reverse') }, '逆向拆分')),
+                        analysisOps[item.pluginId]?.pending ? h('p', { className: 'fb-note', role: 'status' }, '正在按已装版本获取材料并创建分析…') : null,
+                        analysisOps[item.pluginId]?.error ? h('p', { className: 'fb-error', role: 'alert' }, analysisOps[item.pluginId].error) : null
+                      ) : null) : null,
                     h('details', { className: 'fb-tech' },
                       h('summary', null, '技术详情（原生 ID、来源与原始说明）'),
                       h(KV, { rows: [
@@ -1570,7 +1726,8 @@ function installDataClient(React, ctx, component) {
           h(FishDataPanel, { onState: typeof onState === 'function' ? onState : undefined })),
         h('section', { className: 'fb-sec' },
           h('h3', null, '运行纪律与工程约束'),
-          h('div', { className: 'fb-lead' }, '「鱼的身体」由插件页原生开关统一控制：关闭后「饭→胃→手」统一接入流程、本设置页与内置 SHA-256 工具一并停用；如需按该流程安装，请由用户在插件页手动开启。'),
+          h('div', { className: 'fb-lead' }, '「鱼的身体」总开关由插件页原生开关统一控制：关闭后「饭→胃→手」统一接入流程、本设置页与内置 SHA-256 工具一并停用；如需按该流程安装，请由用户在插件页手动开启。'),
+          h('p', { className: 'fb-note' }, '「关闭胃」是胃页的一种工作模式（新安装/更新直装跳过分析），与身体总开关彼此独立：关闭胃不会关掉身体，来源判定、市场更新与手页原生安装状态照常工作。'),
           h(Tech, { title: '展开完整纪律说明' },
             h('p', { className: 'fb-note' }, '启停只操作用户点击的目标来源插件：不批量、不安装卸载、不写 Profile，也不自动启用脑或身体。登记状态不等于已安装、已加载或实测可用；没有运行证据一律显示「暂无反馈」。'),
             h('p', { className: 'fb-note' }, '身体自身未加载或关闭时，可能没有自己的设置页可打开；此时应看 DSH 原生插件页的错误提示，不能理解为「卸载后还能自报错误」。'))),
@@ -1586,6 +1743,7 @@ function installDataClient(React, ctx, component) {
       const [error, setError] = useState(null)
       const [lifecycle, setLifecycle] = useState(null)
       const [bodyDataState, setBodyDataState] = useState(null)
+      const [analysisTarget, setAnalysisTarget] = useState(null)
       const mountedRef = useRef(true)
       const activeRef = useRef(null)
       const tabRefs = useRef([])
@@ -1643,6 +1801,13 @@ function installDataClient(React, ctx, component) {
       function switchTo(id) {
         setActive(id)
         setError(null)
+      }
+
+      /* 手页显式分析请求成功后：记录回跳目标（nonce 保证同一任务可重复触发），切回胃页由 StomachTasks load 同一任务。 */
+      function onAnalysisReady(result) {
+        if (!result || !result.taskId) return
+        setAnalysisTarget({ taskId: result.taskId, analysisId: result.analysisId || '', pluginId: result.pluginId || '', nonce: Date.now() })
+        switchTo('stomach')
       }
 
       /* 方向键 / Home / End 在分段间移动焦点并切换；Tab、Enter、Space 保持原生行为。 */
@@ -1726,8 +1891,8 @@ function installDataClient(React, ctx, component) {
         const sectionPath = current.path
         if (id === 'overview') body = h(OverviewPanel, { onNavigate: switchTo })
         else if (id === 'rice') body = h(RicePanel, { onNavigate: switchTo, sectionPath })
-        else if (id === 'stomach') body = h(StomachTasks, { onOpenFolder: openFolder, sectionPath })
-        else if (id === 'hand') body = h(HandPanel, { onOpenFolder: openFolder, sectionPath })
+        else if (id === 'stomach') body = h(StomachTasks, { onOpenFolder: openFolder, sectionPath, analysisTarget })
+        else if (id === 'hand') body = h(HandPanel, { onOpenFolder: openFolder, sectionPath, onNavigate: switchTo, onAnalysisReady })
         else if (id === 'settings') body = h(SettingsPanel, {
           onState: dataState => {
             setBodyDataState(dataState)

@@ -4,11 +4,13 @@
  */
 
 import { stat } from 'node:fs/promises'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { mountProfileData } from './internal/profile-data.js'
 import { bodyProfileData } from './internal/body-data.js'
 import * as localSwitch from './internal/backend/lib/body-switch.mjs'
 import { prepareBackend } from './internal/backend-entry.js'
+import { INTAKE_MODES, DEFAULT_INTAKE_MODE, INTAKE_MODE_KEY } from './internal/analysis/intake-mode.mjs'
+import { analyzeInstalledFromSource } from './internal/analysis/installed-analysis.mjs'
 import { overview as riceOverview, publicSources, listRiceSources, findRiceSource, attachInstallToSources } from './internal/backend/lib/rice-model.mjs'
 import { checkVersionAsync, checkVersionsBatch } from './internal/backend/lib/version-check.mjs'
 import { spawn } from 'node:child_process'
@@ -470,15 +472,45 @@ export async function apply(ctx, config = {}) {
     return { status: backend.status, code: backend.code, error: backend.error, backend: 'bundled', configPath: backend.configPath }
   } })
   const sections = () => buildSections({ ...config, fishRoot: data.state().root })
-  if (bridge) register(ctx, '/api/fish-body/state', ['GET', 'HEAD'], request => {
+  // 用户默认工作模式（intake mode）读写：复用 per-profile 的 fish-body-state.json（与部署 mode:'production' 分开的 intakeMode 字段）。
+  // 读：GET 带出 defaultMode；写：POST {defaultMode} 原子改写后回读。只改当前 profile 的配置，不碰数据根/绑定/其它 profile。
+  const intakeConfigPath = () => hints.profileDir ? join(hints.profileDir, 'fish-body-state.json') : null
+  const readDefaultMode = () => {
+    try {
+      const p = intakeConfigPath()
+      if (!p || !existsSync(p)) return DEFAULT_INTAKE_MODE
+      const conf = JSON.parse(readFileSync(p, 'utf8'))
+      return INTAKE_MODES.includes(conf[INTAKE_MODE_KEY]) ? conf[INTAKE_MODE_KEY] : DEFAULT_INTAKE_MODE
+    } catch { return DEFAULT_INTAKE_MODE }
+  }
+  const stateRoute = async request => {
+    if (request.method === 'POST') {
+      let payload
+      try { payload = await request.json() } catch { return jsonResponse(request, { ok: false, error: '请求体不是有效 JSON。' }, 400) }
+      const mode = payload && payload.defaultMode
+      if (!INTAKE_MODES.includes(mode)) {
+        return jsonResponse(request, { ok: false, error: `defaultMode 必须是 ${INTAKE_MODES.join('/')} 之一。` }, 400)
+      }
+      try {
+        const p = intakeConfigPath()
+        if (!p || !existsSync(p)) return jsonResponse(request, { ok: false, error: 'FISH_BODY_STATE_MISSING' }, 400)
+        const conf = JSON.parse(readFileSync(p, 'utf8'))
+        conf[INTAKE_MODE_KEY] = mode
+        const temp = p + '.tmp'
+        writeFileSync(temp, JSON.stringify(conf, null, 2) + '\n')
+        renameSync(temp, p)
+        return jsonResponse(request, { ok: true, defaultMode: readDefaultMode() })
+      } catch (error) { return jsonResponse(request, { ok: false, error: error.message }, 400) }
+    }
     const state = bridge.readBodyPhase(hints)
-    return jsonResponse(request, { ...state,
+    return jsonResponse(request, { ...state, defaultMode: readDefaultMode(),
       application: state.phase === 'off' ? 'restart-required' : 'applied',
       message: state.phase === 'closing' ? '正在关闭：等待当前身体操作收尾，不再启动新流程。'
         : state.phase === 'off' ? '身体流程和工具已停用；当前页面卸载等待 DSH 原生重新加载或重启生效。'
           : '鱼的身体已开启。'
     })
-  })
+  }
+  if (bridge) register(ctx, '/api/fish-body/state', ['GET', 'HEAD', 'POST'], stateRoute)
   register(ctx, '/api/fish-body/sections', ['GET', 'HEAD'], async (request) => {
     const sectionsMap = sections()
     const entries = Object.keys(sectionsMap).map((id) => ({
@@ -717,6 +749,38 @@ export async function apply(ctx, config = {}) {
         message: '插件开关调用失败，当前未确认。' } })
     } finally {
       inflight.delete(key)
+    }
+  })
+
+  /* POST 从已安装项进入兼容/逆向分析：按已装来源采材料+建分析+建任务，同步返回 taskId 供前端回跳。
+     只接受 compatibility/reverse（off 是直装、不进分析）；不自动切换已装插件、不伪造批准。 */
+  register(ctx, '/api/fish-body/analyze-installed', ['POST'], async request => {
+    let payload
+    try { payload = await request.json() } catch {
+      return jsonResponse(request, { ok: false, error: '请求体不是有效 JSON。' }, 400)
+    }
+    const pluginId = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload.pluginId : undefined
+    const mode = payload && typeof payload === 'object' ? payload.mode : undefined
+    if (typeof pluginId !== 'string' || !pluginId.trim() || !['compatibility', 'reverse'].includes(mode)) {
+      return jsonResponse(request, { ok: false, error: '需要 pluginId（字符串）和 mode（compatibility/reverse）。' }, 400)
+    }
+    try {
+      const result = await analyzeInstalledFromSource({
+        frameworkRoot: frameworkRoot(),
+        profileDir: hints.profileDir,
+        pluginId: pluginId.trim(),
+        nativeId: payload.nativeId ?? null,
+        packageName: payload.packageName ?? null,
+        mode,
+      })
+      if (result && result.ok) {
+        return jsonResponse(request, { ok: true, taskId: result.taskId,
+          ...(result.analysisId ? { analysisId: result.analysisId } : {}),
+          pluginId: result.pluginId ?? pluginId.trim() })
+      }
+      return jsonResponse(request, { ok: false, error: result?.error ?? '按已装来源进入分析失败，原因未知。' }, 400)
+    } catch (error) {
+      return jsonResponse(request, { ok: false, error: error?.message ?? String(error) }, 400)
     }
   })
 

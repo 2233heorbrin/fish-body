@@ -1,5 +1,48 @@
 # 更新记录
 
+## 0.0.7-dev.22 — 2026-11-23（Codex #330b 自动版本检查下渠道标签残留修正）
+
+- 自动版本检查下直装渠道标签残留修正（dev.21 真机发现的最后一处显示 bug）：dev.21 给 `installedChannel` 加的 `directRegistration.sourceKind` 优先判定已对，但 `currentSourceOf` 循环 `for (const ins of [fromResult, inline])` 里 `fromResult=checks[row.id]?.result?.install` 先命中 installed——页面 mount 自动跑 check-versions 填充 checks，而 check-version 返回的 install 只有 `{sourceId,state,installedVersion,comparison}`、无 directRegistration → `installedChannel` 读不到 sourceKind → 回退 `sourceId='local:…'` → 误报「本地材料·0.1.86」。修正：循环前把 fromResult 规范化为 effectiveFromResult——installed 且缺 directRegistration 且 inline 有时，浅挂一份 `{...fromResult, directRegistration: inline.directRegistration}`，循环改用 effectiveFromResult；fromResult 其余字段/优先语义不变、不污染 checks 原对象、无 directRegistration 旧来源仍走原 fallback。后端/installedChannel/安装/注册/身份判定/installLine-carrier 全不碰、不伪造渠道。
+- 验证：node --check、UI 契约 41/41 + w2 前端 19/19（新增 #330b 三条断言：fromResult 无 dr + inline 有 dr → npm 不误判 local + 其余字段未被覆盖 + checks 原对象未污染 + 无 dr 旧来源走 fallback）+ 饭来源 9/9 + review-fix 4/4；隔离 harness 开自动 check 宽窄真机图「实际安装 npm · 0.1.86（当前安装）」showsNpm=true/showsLocalWrong=false、零 pageerror/console error。开工/完工门命中 §5/§9（依赖循环、插件装卸旧教训，与只补显示字段无关，报告如实记录）。仅本地测试分支与隔离验证，未合并 / tag / Release / registry / 未装日常。
+
+## 0.0.7-dev.21 — 2026-11-23（Codex #330 直装渠道标签显示收尾）
+
+- 直装来源渠道显示修正（唯一显示收尾）：`client.js:1165` `installedChannel` 函数开头优先读 `install.directRegistration?.sourceKind`（npm/github，rice-model.mjs:451 已输出），命中直接返回真实渠道；旧 source/sourceId 文本判定 fallback 一行不动。修的是 dev.20 真机图「实际安装」把 npm 直装误显示成「本地材料·0.1.86」——因 direct-registration 的 `sourceId='local:饭/直装来源/dsh-meme/npm-…'` 命中 `/^local:/` 落 local 分支。安装/注册/身份判定全不变、不改后端。
+- 验证：node --check、UI 契约 41/41 + w2 前端 18/18（新增 #330 定向断言：directRegistration.sourceKind=npm|github + sourceId='local:…' → 返回 npm/github 而非 local，无 sourceKind 时原 fallback 保留）+ 饭来源 9/9 + review-fix 4/4；宽窄真机图 DOM「实际安装 npm · 0.1.86（当前安装）」showsNpm=true/showsLocalWrong=false、零 pageerror/console error。开工/完工门命中 §10（依赖循环教训，与只改显示字段无关，报告如实记录）。仅本地测试分支与隔离验证，未合并 / tag / Release / registry / 未装日常。
+
+## 0.0.7-dev.20 — 2026-11-23（Codex #327 饭来源与证据定向收尾：直装登记接入 / 按钮文案 / 报告 JSON）
+
+- 饭·当前安装来源接入本轮直装登记（Codex #327 第1项）：`rice-model.mjs` 新增 import `listDirectSources`（只读、依赖无环）与 `resolveInstalls` 内「直装登记优先判定」层 `directRegistrationFor(e,directSources)`——包名归一相等 + 该行确属 `registration-only` 直装登记 + 同名多条用 linkRealPath/bodyPath/contentIdentity.version 交叉只认唯一条，三条件全满足才产出 `state:'installed', source:'direct-registration'`；未命中原样走旧 `mapInstalled`（install-mapping 一行未动）。历史同包不同 id/bodyPath 仍 unconfirmed 不冒当前、卸载后 realpath 消失自动撤当前、unconfirmed basis 按真实原因（交叉未通过/无匹配登记）写，不再一律归因「内容等价历史」。不伪造 formalDecision/analysisApproved、不改 client。
+- 饭·分析入口按钮名副其实（第2项）：`client.js` 按钮「用已装本体按需采集并进入分析」→「到胃工作区查看/分析 →」+ title 说明本页不预先采集，fb-note 导向「手·组件」页已装项分析真入口（#318 已通过），onClick 仍纯导航；不碰手页、不造编排、不调 analyze-installed。
+- 隔离集成报告 JSON 修正（第4项，仅 evidence 非源码）：`dev19-ui-update-PASS.json` 非法拼接 dep → 真实完整序列化值 + depSource；`dev19-peer-client-evidence.json` 保留 dshToolsResolveError + 补 hostObserverPeerImport 原始结果 + evidenceBoundary 分清「插件目录直接 resolve 失败」与「宿主 installAnchor 解析成功」两场景。
+- 验证：反例 5/5（登记精确识别/历史不冒当前/卸载撤当前/同名不同源/文案真实性）、w2 前端 17/17 + UI 契约 41/41 + 饭来源 9/9 + review-fix 4/4、仓库 rice-source 9/9 + rice-group 21/21 + install-wiring 10/10、既往 W2 六套无回归、`node --check` 全过、开工/完工门命中无。GitHub 真实 subdir 无样本仍 unknown、反例用 junction 模拟 link 未复现真实宿主前端点击链路，按四类分栏如实标注。仅本地测试分支与隔离验证，未合并 / tag / Release / registry / 未装日常。
+
+## 0.0.7-dev.19 — 2026-11-23（Codex #324 四项定向补修：配置接线 / 子包路径 / 饭一插件一卡 / 真集成证据）
+
+- 配置接线（维护源 Profile 作用域）：`market-runtime.mjs` 新增 `withProfileStateScope`（`value.apply(adapter,args)` 保 this、forProfile fallback 也包作用域），`install-transaction.js` 用作用域包装后的 `managedDirectLink`/`directSourceRecord`/`directUpdateTarget` 替代裸摊平对象，去掉 probe 全进程 `FISH_HAND_STATE` 依赖——正常启动即按每 Profile 自动接线市场来源识别/检查/更新，不再靠环境变量补通。修的是 `FH_STATE_MISSING` 产品遗漏，隔离启动 shim 与之分开。
+- GitHub 子包路径：`installed-analysis.mjs` GitHub 分支 `materialPath` 从完整仓 `entry.repoDir` 收窄到 `repoDir/subdir`（realpath 后），subdir 权威取 `entry.subdir` + found 兜底，两次 `path.relative` 越界防护，空 subdir 保持整仓不回归，npm 分支未动——从已装项进入分析不再纳入兄弟包/仓根。
+- 饭·一插件一卡归一（Codex #324 第3点）：`rice-model.mjs` 仅加展示层字段 `displayKey`/`packageName`（身份核实逻辑不动），`client.js` 按核实包名归一成每渠道每插件一行、详情头改「含未核实来源」、卡级「有新版本」只认安装版比较、材料行 newer 标「仅该来源材料，非安装升级」、版本清单逐条列当前安装/历史来源+身份依据、未采材料按钮如实禁用并改「用已装本体按需采集并进入分析」。
+- 验证：配置接线 A/B 决定性证据 7/7+5/5（裸 adapter 识别不到来源 vs 作用域 adapter 识别、错指环境变量仍优先）、子包路径专项 15/15 + 回归 13/13+13/13（夹具测、无真实子包样本如实标注）、前端 16/16 + UI 契约 41/41 + 饭来源 9/9 + review-fix 4/4；源码 `node --check` 全过、开工/完工门命中无。真 DSH 插件隔离集成（真市场 UI 点击/干净卸载/真 peer import）见执行报告，证据分层不抬高。仅本地测试分支与隔离验证，未合并 / tag / Release / registry / 未装日常。
+
+## 0.0.7-dev.18 — 2026-11-23（#318 收尾：四阻塞修复 + 从已装项进入分析 + 真 DSH 插件验收）
+
+- 分支冻结修复：直装来源 `refKind` 区分 pin/ref/default，`requestedRef` 原样保留、已装 commit 降级为纯内容身份，分支/浮动 ref 继续跟踪、40hex pin 原样保留（更新渠道与内容身份分离）。
+- 可分发市场适配：`market-compat-adapter` v1.1.0 内嵌 14 条由 pristine→适配副本精确生成的补丁，补 `installAdaptation`（幂等）/`uninstallAdaptation`（手术式只撤自身）/`verifyAdaptation`；restore 默认拒绝全量覆盖，修复 CURRENT_CHANGED 误报。
+- 产物内容寻址：`revisionOf` 纳入 integrity/registry/spec，`body-prep` 暂存后原子 rename 切换，同源同版复用不重装、身份冲突拒覆盖，不对被引用目录重装。
+- 脚本授权边界：`runtimeReadiness` 只读判定（ready/needs-build/no-entry），`--ignore-scripts` 只装依赖不跑生命周期、不冒充可运行。
+- 从已装项进入分析：手页就地选兼容/逆向 → `POST /api/fish-body/analyze-installed` → 按已装来源采材料（GitHub codeload / npm 真实 bodyPath）→ 建分析+建任务，回到同一插件；不切插件、不建 off 任务、不伪造批准。
+- 三值白名单单点化：index.js/backend-entry.js/tasks.mjs 统一引用 intake-mode.mjs 的 `INTAKE_MODES`/`DEFAULT_INTAKE_MODE`/`INTAKE_MODE_KEY`。
+- 验证：全量回归 121 项 + 真 DSH 插件（dsh-meme）四类分栏 E2E 8/8（原生安装/真实运行/市场更新/GitHub 样本），本体入仓 realpath/登记/真 Cordis 加载/0.1.81→0.1.86 更新/新版入仓旧版保留。
+
+## 0.0.7-dev.17 — 2026-11-23（胃三模式与手插件仓接入测试版）
+
+- 主人「就先按照这样、开始做吧」授权（Codex #300 交接、#309 收口）；从 dev.16 commit 1c6353b 开 feat/body-intake-modes-warehouse 分支，原 8 项 untracked 保留。三职责 Agent 按唯一文件归属并行实施 + 主模型集成胶水。
+- 胃三模式（off/compatibility/reverse）：`internal/analysis/intake-mode.mjs` 单点白名单 INTAKE_MODES + DEFAULT='compatibility' + `readPersistedIntakeMode` / `resolveIntakeMode`（显式>持久化>默认）；tasks.mjs `create(off)` 独立短路返回 `{mode:'off',phase:'skipped',status:'registration-only',skipped:true,taskId:null}`，不建任务、不产 plan/materials、不调模型、不伪造批准、不落 task.json；artifact/produce/confirm 加 off 抛错防落 reverse 分支，update 拒旧任务 patch→off（切模式只影响新请求）；conversation.mjs 加 off 独立直装口径 prompt + DISCUSSION_GUIDE【六、off】。
+- 默认工作模式持久化（主模型集成层）：backend-entry.js 的 configureBackend 把 `intakeMode` 并入保留字段（重写 conf 前读旧值、仅接受三值否则默认 compatibility，重启不回退）；index.js `/api/fish-body/state` 扩 GET/HEAD/POST，GET 带出 `defaultMode`、POST 收 `{defaultMode}` 原子改写 fish-body-state.json 的 intakeMode 回读，非法值 400；与部署用 `mode:'production'` 语义分离、不碰数据根/绑定/其它 profile。
+- 前端 client.js：三模式卡（三列/窄屏一列、aria-pressed、当前选择 Tag）+ chooseMode 只影响新请求不改已开任务 + 模式持久化读写；饭页 sourceStatus 四值（collected/downloaded-pinned/registration-only/material-absent）渲染、未采材料绝不显示"已保存"；手页「原生安装·未拆分」+「从已装项进入分析」显式入口 + 身体总开关独立于关闭胃；off 建任务按钮拦截（双保险，后端短路兜底）。
+- 市场直装与来源（纵向链）：`market-direct-source.mjs`（真实已装来源唯一读取/登记）、`market-optional-seam.mjs`（市场 seam 维护源）、original-source.mjs 共用入口 installedSourceRecord、market-prepare.mjs off 直装立即返回 `{directInstall:true,analysis:null,authorization:'intake-off-direct'}` 跳过 runW2W3/review/approve；market-runtime.mjs 暴露直装方法 + deploy 后登记来源；rice-model.mjs 顶层 sourceStatus 四值。隔离副本 dshmarket routes.js/updates.js 同步（directSourceFor 贯穿 updateCheckInputs + summary/单条/列表三处 checkUpdates + cacheKey + updates.js 比较链 + stillLocal，受管 link 走原渠道 spec 不查 catalog 不换 npm latest；普通 dev link/generation link 不误接管）。三处纠正=来源判定与分析批准分离 / 读来源接回原渠道不换源 / 完整消费者。
+- 验证：node --check 全 changed 文件 exit0；UI 契约 41/41、W2 前端 9/9、off 专项 8/8、rice-source 9/9、rice-group 21/21、install-wiring 10/10、review-fix 4/4、纵向链反例 12/12 fail0；三组改动合并同一工作树无组合回归（主模型集成复核全量真跑）。非本次引入 FAIL：stomach-entry-conditions.test.mjs 1/14（line433 正则与 off 六段文案不符）、backend-install-decision 缺前置——已标清非本轮。仅本地测试分支与隔离验证，未合并 / tag / Release / registry / 未装日常。
+
 ## 0.0.7-dev.16 — 2026-11-22（鱼身体主导航迁移 + 饭页 GitHub/npm 两渠道布局测试版）
 
 - 鱼身体入口从设置侧栏迁到 DSH 主侧栏：client.js 注册 main keyed panel + sidebar.panellist，返回会话按钮走 `ctx.get('layout')?.selectPanel(null)` 回到原会话，不再藏在设置页里。

@@ -6,8 +6,10 @@ import { writeJson } from './io.mjs';
 import { recordEntries, findRecordDirectory, newRecordDirectory, sourcePlugin, recordMetadata, recordPlugin } from './records.mjs';
 import { conversationGuide } from './conversation.mjs';
 import { ownershipIndex, ownershipOf } from './unified.mjs';
+import { INTAKE_MODES } from './intake-mode.mjs';
 const read = f => JSON.parse(fs.readFileSync(f, 'utf8'));
-const modes = ['compatibility', 'reverse'], categories = ['tool', 'brain', 'mixed', 'unknown'];
+// 单点白名单来自 intake-mode.mjs，确保与前端 modeChoices 完全一致（off/compatibility/reverse）。
+const modes = INTAKE_MODES, categories = ['tool', 'brain', 'mixed', 'unknown'];
 const depKinds = ['implementation', 'shared-state-initialization', 'lifecycle-release', 'resources-programs', 'incidental-behavior', 'unresolved-relation'];
 const text = (s, label, max = 2000) => { if (typeof s !== 'string' || !s.trim() || s.length > max) throw Error(label + ' requires nonempty text, max ' + max); return s.trim(); };
 function origin(v) {
@@ -201,6 +203,8 @@ function sourceFragments(t, a) {
   return [...ranges.values()];
 }
 function artifact(t, a) {
+  // 防御：off（关闭胃）不构造任何分析产物；即使被误调到此处也绝不落入 reverse-materials 默认分支。
+  if (t.mode === 'off') throw Error('off mode produces no plan/materials; direct install handled by the market-prepare chain');
   const retained = t.capabilities.filter(c => t.selected.includes(c.id)), excluded = t.capabilities.filter(c => !t.selected.includes(c.id));
   const common = { schema: 'fish-stomach-task-output/v1', taskId: t.taskId, revision: t.revision, mode: t.mode, analysisId: t.analysisId, plugin: t.plugin,
     source: t.source, classification: { candidate: t.classification, judgment: t.judgment }, retained, excluded,
@@ -237,7 +241,11 @@ export async function taskJob(args, scope, helpers) {
   }
   let t, dir, a;
   if (op === 'create') {
-    if (!modes.includes(args.taskMode)) throw Error('Explicit compatibility/reverse required');
+    if (!modes.includes(args.taskMode)) throw Error('Explicit off/compatibility/reverse required');
+    // off（关闭胃）：直装跳过分析。不建分析任务、不产 plan/materials、不调模型、不伪造批准。
+    // 直装由纵向链 market-prepare 处理；本层只如实返回跳过状态，不落任何 task.json。
+    if (args.taskMode === 'off') return ok({ mode: 'off', phase: 'skipped', status: 'registration-only', skipped: true, taskId: null,
+      boundary: '胃已关闭（off）：跳过胃分析直装；本层不建分析任务、不产 plan/materials、不伪造 analysisApproved/confirmation；安装/更新由直装链处理。胃关≠身体关。' });
     a = await openTaskAnalysis(scope,args.analysisId);
     const taskId = randomUUID(), plugin = sourcePlugin(path.join(a.dir,'run/source-snapshot'), a.rec.source.path); dir = newRecordDirectory(root,'task',taskId,plugin);
     // Avoid writing task outputs into the candidate tree, even for a broad local source.
@@ -272,7 +280,13 @@ export async function taskJob(args, scope, helpers) {
       if (Object.keys(p).some(k => !allowed.includes(k))) throw Error('Unknown task patch field');
       if (p.analysisId) { t.analysisId=p.analysisId; t.source=a.rec.source; t.capabilities=candidates(a);t.selected=[];t.dependencies=[];t.classification=classification(a);t.judgment=null;t.unknowns=[];t.analysisUnknowns=analysisUnknowns(a);t.completeness=a.summary.validity;
         t.plugin=sourcePlugin(path.join(a.dir,'run/source-snapshot'), a.rec.source.path); }
-      if (p.mode) { if (!modes.includes(p.mode)) throw Error('Invalid task mode');t.mode=p.mode; }
+      if (p.mode) {
+        if (!modes.includes(p.mode)) throw Error('Invalid task mode');
+        // off 不产生分析任务记录，不能把已有（可能已选中/已确认）的分析任务改写成 off；
+        // 关闭胃只作用于新请求，旧任务行为保持不变。
+        if (p.mode === 'off') throw Error('Cannot patch an existing analysis task to off; off applies to new requests only');
+        t.mode=p.mode;
+      }
       for (const c of p.addCapabilities ?? []) { const o=origin(c.origin), evidenceRefs=refs(c.evidenceRefs ?? [],a); if (!['tool','brain','unknown'].includes(c.category)) throw Error('Invalid capability category');t.capabilities.push({id:'supplement/'+randomUUID(),name:text(c.name,'capability name',160),category:c.category,origin:o,evidenceRefs}); }
       if (p.classification) { if(!categories.includes(p.classification.value))throw Error('Invalid classification');t.judgment={value:p.classification.value,origin:origin(p.classification.origin),evidenceRefs:refs(p.classification.evidenceRefs ?? [],a)}; }
       if (p.selected) { if(!Array.isArray(p.selected)||p.selected.some(id=>!t.capabilities.some(c=>c.id===id)))throw Error('Select capability IDs, not files');t.selected=[...new Set(p.selected)]; }
@@ -291,12 +305,16 @@ export async function taskJob(args, scope, helpers) {
       if (Object.keys(p).some(k => k !== 'explanation')) { t.revision++;t.confirmation=null;t.phase='plan-pending'; }
       if (Object.hasOwn(p,'explanation')) t.explanation=explain(p.explanation,t,a);
     } else if(op === 'produce') {
+      // off（关闭胃）：不产出 plan/materials，不写输出文件，不推进到产出态。
+      if (t.mode === 'off') throw Error('off mode (胃已关闭) does not produce plan/materials; direct install is handled outside the analysis task layer');
       if(!t.selected.length)throw Error('Select at least one capability');
       const existing=t.outputs.find(o=>o.revision===t.revision);if(existing)return ok(overview(t));
       const value=artifact(t,a);await openTaskAnalysis(scope,t.analysisId);
       const file='outputs/'+t.revision+'/'+(t.mode==='compatibility'?'plan.json':'materials.json');writeJson(path.join(dir,file),value);
       t.outputs.push({revision:t.revision,mode:t.mode,kind:value.kind,file,path:path.join(dir,file)});t.phase=t.mode==='compatibility'?'plan-awaiting-confirmation':'materials-produced';
     } else if(op === 'confirm') {
+      // off（关闭胃）：没有分析产出，也不伪造 confirmation/approval。
+      if (t.mode === 'off') throw Error('off mode (胃已关闭) has no analysis output to confirm; no approval is fabricated');
       if(!t.outputs.some(o=>o.revision===t.revision)||!t.judgment)throw Error('Produce current revision and record attributed overall judgment before confirmation');
       t.confirmation={revision:t.revision,origin:origin(args.taskConfirmation)};
       t.phase=t.confirmation.origin.kind==='current-model'?'model-reviewed-awaiting-user':t.mode==='reverse'?'materials-confirmed':t.dependencies.some(d=>d.decision==='pending')?'confirmed-with-open-questions':'confirmed-awaiting-separate-execution';

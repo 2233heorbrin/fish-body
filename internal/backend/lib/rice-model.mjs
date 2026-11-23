@@ -6,11 +6,29 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve, relative, basename, dirname } from 'node:path'
 import { mapInstalled, repoFromDeclaration } from './install-mapping.mjs'
+// #327：直装登记来源的只读实时查询（不回指 rice-model，无环）。install-mapping 的
+// readRealInstall 只认 registry+formalDecisionId+requestId，覆盖不到 registration-only 直装行；
+// 这里补一层「直装登记优先判定」，旧 mapInstalled 规则一行不动。
+import { listDirectSources } from './market-direct-source.mjs'
+
+// 直装登记查询只读且必须健壮：文件损坏/并发读写不能让饭页 sources 列表整体 500。
+function safeDirectSources(frameworkRoot, profileDir) {
+  try { return listDirectSources({ frameworkRoot, profileDir }) || [] } catch { return [] }
+}
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'))
 const isDir = (p) => { try { return statSync(p).isDirectory() } catch { return false } }
 const text = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
 const safeJson = (p) => { try { return readJson(p) } catch { return {} } }
+
+// W2 来源登记状态口径（跨 Agent 契约第 3 节）：对外 item 顶层必须直接带四值之一。
+// registration-only = 直装只登记真实来源未采材料；material-absent = 明确无材料，
+// 两者都不得冒充「已保存材料」。既有 collected/downloaded-pinned 语义保持不变。
+export const SOURCE_STATUS_VALUES = Object.freeze(['collected', 'downloaded-pinned', 'registration-only', 'material-absent'])
+function sourceStatusOf(meta) {
+  const s = text(meta?.sourceStatus)
+  return SOURCE_STATUS_VALUES.includes(s) ? s : 'collected'
+}
 
 function validRoot(root) {
   return typeof root === 'string' && root.trim() && isDir(root) ? resolve(root) : null
@@ -124,30 +142,40 @@ function projectSource(root, p, dir) {
   return {}
 }
 
-/** 本地版本：优先 list 里的 manifest 版本，其次固定提交短号。 */
+/** 本地版本：优先 list 里的 manifest 版本，其次登记的内容身份版本，再次固定提交短号。 */
 function localVersion(source, doc) {
-  const v = text(source?.versionFromManifest ?? source?.version ?? doc?.versionFromManifest)
+  const v = text(source?.versionFromManifest ?? source?.version ?? source?.contentIdentity?.version
+    ?? doc?.versionFromManifest)
   if (v) return v
-  const commit = text(source?.pinnedCommit ?? doc?.pinnedCommit ?? source?.published?.integrity)
+  const commit = text(source?.pinnedCommit ?? source?.updateChannel?.resolvedCommit
+    ?? source?.updateChannel?.requestedRef ?? doc?.pinnedCommit ?? source?.published?.integrity)
   if (commit && commit.length >= 7) return commit.slice(0, 7)
   return null
 }
 
 function remoteMetadata(source, doc) {
-  const url = text(source?.upstreamUrl ?? source?.upstream ?? doc?.upstreamUrl)
-  const owner = text(source?.owner ?? doc?.owner)
-  const repo = text(source?.repository ?? source?.repo ?? doc?.repository)
-  const subdir = text(source?.subdir ?? doc?.subdir)
+  // Codex #315 #4：直装登记记录把原渠道写在 updateChannel、真实版本写在 contentIdentity。
+  // 兼容这些字段，让 hasRemote / localVersion / sourceStatus 有值；不覆盖既有 upstream/owner/repo 语义。
+  const channel = source?.updateChannel && typeof source.updateChannel === 'object' ? source.updateChannel : null
+  const url = text(source?.upstreamUrl ?? source?.upstream ?? doc?.upstreamUrl ?? channel?.sourceUrl)
+  const owner = text(source?.owner ?? doc?.owner) ?? (() => {
+    const m = /github\.com[:/]([^/#]+)\/([^/#]+)/i.exec(String(url ?? '')); return m?.[1] ?? null
+  })()
+  const repo = text(source?.repository ?? source?.repo ?? doc?.repository) ?? (() => {
+    const m = /github\.com[:/]([^/#]+)\/([^/#]+)/i.exec(String(url ?? '')); return m?.[2]?.replace(/\.git$/i, '') ?? null
+  })()
+  const subdir = text(source?.subdir ?? doc?.subdir ?? channel?.sourceSubdir)
   const packageName = text(source?.packageName ?? doc?.packageName ?? source?.packageNameFromManifest ?? doc?.packageNameFromManifest)
-  const pinnedCommit = text(source?.pinnedCommit ?? doc?.pinnedCommit)
+  const pinnedCommit = text(source?.pinnedCommit ?? doc?.pinnedCommit ?? channel?.resolvedCommit ?? channel?.requestedRef ?? channel?.ref)
   const versionFromManifest = text(source?.versionFromManifest ?? doc?.versionFromManifest
+    ?? source?.contentIdentity?.version
     ?? source?.packageJson?.version ?? doc?.packageJson?.version)
   const published = source?.published && typeof source.published === 'object' ? source.published : null
   // packageJson.repository 是包清单里声明的规范仓库（同源核对证据），并入 published 视图供 declaredRepoOf 读取。
   const packageJsonRepo = text(source?.packageJson?.repository?.url ?? source?.packageJson?.repository
     ?? doc?.packageJson?.repository?.url ?? doc?.packageJson?.repository)
   return { upstreamUrl: url, owner, repo, subdir, packageName, pinnedCommit, versionFromManifest,
-    published, packageJsonRepo }
+    published, packageJsonRepo, updateChannel: channel, contentIdentity: source?.contentIdentity ?? null }
 }
 
 function normalizeItem({ id, source, doc, dir, hint, root }) {
@@ -357,6 +385,41 @@ function contentFingerprintOf(e) {
 }
 
 /**
+ * #327 直装登记优先判定：一行来源证据是否就是「当前 Profile 下真实已装、且来自本轮直装登记」。
+ * 三条必须全满足，任一不满足 → null（交回旧 mapInstalled 规则，一行不动）：
+ *   ① 包名归一相等（e.pkgName ↔ record.packageName）；
+ *   ② 该行确属直装登记（e.meta.sourceStatus === 'registration-only'，且 directSources 里确有其记录）；
+ *   ③ 同名多条时用 linkRealPath / bodyPath / contentIdentity.version 交叉，只认唯一一条。
+ * 只认「当前 Profile 声明 spec + 当前 link realpath + 登记身份 + 实时内容身份」全部实时核过的记录；
+ * 历史同包不同 id / 不同 bodyPath / 已卸载（realpath 消失）一律不冒当前。
+ */
+function directRegistrationFor(e, directSources) {
+  if (!Array.isArray(directSources) || !directSources.length) return null
+  const meta = e.meta || {}
+  // ② 确属直装登记行（直装 sources.json 的 sourceStatus=registration-only）。
+  if (text(meta.sourceStatus) !== 'registration-only') return null
+  const pkg = normPackageName(e.pkgName || text(meta.packageName) || text(e.row?.name))
+  if (!pkg) return null
+  // ① 包名归一相等。
+  const sameName = directSources.filter((r) => normPackageName(r.packageName) === pkg)
+  if (!sameName.length) return null
+  // 实时内容身份已漂移（改字节/改版本）的登记行不冒当前安装；原样交回旧规则，basis 由下方修正。
+  // ③ 用 linkRealPath / bodyPath / contentIdentity.version 交叉，只认唯一条。
+  const version = text(meta.contentIdentity?.version) || text(meta.versionFromManifest) || null
+  const uniq = sameName.filter((r) => {
+    if (r.contentDrift) return false
+    const rver = text(r.contentIdentity?.version)
+    if (version && rver && version !== rver) return false
+    const rBody = text(r.bodyPath), rLink = text(r.linkRealPath)
+    const mBody = text(meta.contentIdentity?.linkRealPath || meta.bodyPath || meta.linkRealPath)
+    if (mBody && rBody && mBody !== rBody && mBody !== rLink) return false
+    return true
+  })
+  if (uniq.length !== 1) return null
+  return uniq[0]
+}
+
+/**
  * 统一「逐来源安装映射」：列表 publicSources、单条/批量版本路由 attachInstallToSources
  * 都走这里，保证同一份材料在三条链路得到完全一致的 install 结论，杜绝卡头未确认/行已安装的分裂。
  * 口径与原 groupSources:452-461 完全相同，不硬编码 profileDir（由 options.profileDir 注入）。
@@ -367,7 +430,35 @@ function contentFingerprintOf(e) {
  */
 function resolveInstalls(evidence, options = {}) {
   const installs = new Map()
+  // #327：一次取当前 Profile 直装登记来源（只读、实时核 realpath/身份/Profile；卸载后自动消失）。
+  // 没有 profileDir/frameworkRoot 上下文时返回空数组，全部回退旧规则（不硬编码、不探测其他 Profile）。
+  const directSources = (options.frameworkRoot && options.profileDir)
+    ? safeDirectSources(options.frameworkRoot, options.profileDir)
+    : []
   for (const e of evidence) {
+    // #327 直装登记优先判定：命中 → 直接 installed/direct-registration，不再走 mapInstalled
+    // 那套 registry+formalDecisionId+requestId 三源交叉（那是分析产物路径，registration-only 无分支消费）。
+    const direct = directRegistrationFor(e, directSources)
+    if (direct) {
+      installs.set(e.row.id, {
+        state: 'installed',
+        source: 'direct-registration',
+        version: text(direct.contentIdentity?.version) || e.row.localVersion || null,
+        sourceId: e.row.id,
+        sourceStatus: 'registration-only',
+        basis: `当前 Profile 直装登记来源：包名、link realpath（落在本体仓内）、登记身份与实时内容身份交叉核实一致；零胃分析、无正式决定。本体 ${text(direct.bodyPath || direct.linkRealPath) || '未知'}。`,
+        directRegistration: {
+          sourceKind: direct.sourceKind || null,
+          sourceSpec: text(direct.sourceSpec || direct.npmSpec) || null,
+          requestedRef: text(direct.requestedRef) || null,
+          resolvedCommit: text(direct.resolvedCommit) || null,
+          bodyPath: text(direct.bodyPath) || null,
+          linkRealPath: text(direct.linkRealPath) || null,
+          contentIdentity: direct.contentIdentity || null
+        }
+      })
+      continue
+    }
     const act = e.actual
     const raw = mapInstalled({
       frameworkRoot: options.frameworkRoot,
@@ -380,6 +471,15 @@ function resolveInstalls(evidence, options = {}) {
       sourceId: e.row.id,
       deps: options.installDeps || {}
     })
+    // #327 unconfirmed 文案按真实原因：直装登记行没命中是因为内容漂移/仓外/realpath 失配/同名多条，
+    // 绝不一律归因「内容等价历史」。旧规则未命中本就有自己的 basis，这里只对直装登记行补真实原因。
+    if (raw.state === 'unconfirmed' && text(e.meta?.sourceStatus) === 'registration-only') {
+      const why = directSources.some((r) => normPackageName(r.packageName) === normPackageName(e.pkgName || text(e.meta.packageName)))
+        ? '直装登记身份与当前安装的 link realpath/版本/内容身份交叉未通过（内容漂移或同名多条无法唯一认定）'
+        : '当前 Profile 无匹配的直装登记来源（可能已卸载、本体 realpath 消失或不属于当前 Profile）'
+      installs.set(e.row.id, { ...raw, basis: `${why}；当前安装来源未确认，未伪造正式决定或分析批准。` })
+      continue
+    }
     installs.set(e.row.id, { ...raw })
   }
   // 内容等价检测：只有被判 installed 的条目才需要辨别「多条同内容冒充多个当前来源」。
@@ -532,10 +632,22 @@ function groupSources(options) {
         if (g.meta?.sourceStatus) h.checkedHint = g.meta.sourceStatus
         return h
       })
+      // 展示归一键（#324）：按「核实包名」把同一插件的多条来源记录归并成一张展示卡。
+      // 有核实包名 → pkg:<包名>；无包名（本地/solo）→ 按来源 id 单列。
+      // 这是展示层键，不是身份核实键：groupKey/identityBasis/install 全部原样保留，
+      // fork 自证虽可能与同源记录共用 displayKey，仍逐条带自己的 groupKey/identityBasis，
+      // 前端详情如实分述，绝不因归一展示就把 fork 认成已核实的同源或当前安装来源。
+      const displayKey = d.pkgName ? `pkg:${d.pkgName}` : `solo:${d.row.id}`
       const out = {
         ...item,
+        // 顶层直接带四值之一：前端按 item.sourceStatus 渲染，兼容 item.source?.sourceStatus/_meta。
+        // 取本条自己的登记状态（d.meta.sourceStatus），不和同组其它来源串状态。
+        sourceStatus: sourceStatusOf(d.meta),
         groupKey: key,
         groupName: name,
+        // #324 对外新增：核实包名（无则 null）与展示归一键，供前端展示层「一插件一卡」归一。
+        packageName: d.pkgName || null,
+        displayKey,
         identityBasis: d.identityBasis,
         sourceHistory
       }

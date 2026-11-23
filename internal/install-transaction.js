@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { bodyProfileData } from './body-data.js'
 import { configureBackend } from './backend-entry.js'
 import { withStateConfig, loadProductionState } from './backend/production-state.mjs'
-import { createMarketBodyAdapter, prepareInChild, restorePreparedRegistration } from './backend/lib/market-runtime.mjs'
+import { createMarketBodyAdapter, prepareInChild, restorePreparedRegistration, withProfileStateScope } from './backend/lib/market-runtime.mjs'
 import { classifyPnpmArgs, parseInstallSpecs, nativeOfficialSpecs } from './backend/fish-hand-admission-gate.mjs'
 import { readBodyPhase } from './backend/lib/body-switch.mjs'
 
@@ -44,9 +44,13 @@ export function createInstallTransaction(context) {
     if (result?.exitCode === 0 && result.managedLocal) completed.push(result.managedLocal)
     return result
   }
+  // Codex #324 / dev18 #1：市场经 SLOT.forProfile 取到的每个方法（managedSpec / managedDirectLink /
+  // directSourceRecord / directUpdateTarget / registerDirect ...）内部都 confFor()→loadProductionState()，
+  // 必须带本 Profile 的 ALS 配置作用域；去掉 FISH_HAND_STATE 才能照常识别来源/检查更新/真更新。
+  // withProfileStateScope 用 value.apply(adapter,args) 保住 this（directUpdateTarget 内部依赖 this.directSourceRecord）。
+  const scoped = withProfileStateScope(adapter, configPath)
   return {
-    ...adapter,
-    managedSpec: (name, spec) => withStateConfig(configPath, () => adapter.managedSpec(name, spec)),
+    ...scoped,
     afterRecovery: result => withStateConfig(configPath, () => {
       if (!result.ok) return { ok: false, error: '原生运行副本尚未恢复，身体登记不能声称已恢复。' }
       for (const prepared of completed.reverse()) restorePreparedRegistration(conf,

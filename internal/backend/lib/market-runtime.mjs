@@ -6,14 +6,33 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fork, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { loadProductionState, assertProfileAllowed, refreshProductionState, stateConfigPath } from '../production-state.mjs';
+import { loadProductionState, assertProfileAllowed, refreshProductionState, stateConfigPath, withStateConfig } from '../production-state.mjs';
 import { projectPlugin } from '../registry-adapter.mjs';
 import { readBodyPhase, withBodyOperation } from './body-switch.mjs';
-import { samePath } from './path-identity.mjs';
+import { samePath, pathIdentity } from './path-identity.mjs';
 import { atomicJson } from './w6-utils.mjs';
 import { expectedDeployedHashes, verifyDeployedContent } from './w6-deploy.mjs';
 import { parseInstallSpecs, classifyPnpmArgs } from '../fish-hand-admission-gate.mjs';
-import { originalSourceOptions } from './original-source.mjs';
+import { originalSourceOptions, installedSourceRecord } from './original-source.mjs';
+// W2 纠正①②：直装来源登记 + 真实受管来源读取 + 原渠道更新目标（与 fish-body-optional seam 共用）。
+import { registerDirectSource, directInstallIntent, readInstalledSource, directUpdateTarget,
+  isDirectManagedLink, installedVersion, currentLinkRealPath, isWithinWarehouse, warehouseRoot } from './market-direct-source.mjs';
+// 安装意图分流单点入口（补位后端落地，只读引用；Codex #315 #2 / 共享契约 §2）：
+// 市场普通安装显式 installKind:'market' → 固定 off，绝不读持久化分析模式；
+// 只有显式合法 intakeMode 才走 explicit，其余不在此处自造分析默认。
+import { resolveInstallIntent } from '../../analysis/intake-mode.mjs';
+
+/** 把市场 adapter 的全部函数方法包进 Profile 配置作用域（ALS），保留 this=adapter。
+ *  Codex #324 / dev18 #1：市场经 SLOT.forProfile 拿到的 adapter 方法（managedDirectLink /
+ *  directSourceRecord / directUpdateTarget / registerDirect ...）内部 confFor()→loadProductionState()
+ *  依赖 withStateConfig 的 ALS 作用域；裸调会回退 FISH_HAND_STATE/deployedConfigPath 而 FH_STATE_MISSING。
+ *  value.apply(adapter,args) 保证 directUpdateTarget 里的 this.directSourceRecord 仍指向同一 adapter。 */
+export function withProfileStateScope(adapter, configPath) {
+  return Object.fromEntries(Object.entries(adapter).map(([key, value]) =>
+    [key, typeof value === 'function'
+      ? (...args) => withStateConfig(configPath, () => value.apply(adapter, args))
+      : value]));
+}
 
 const SLOT=Symbol.for('fish-body.market.v1');
 const state=globalThis[SLOT]??= {managers:new Map()};
@@ -22,8 +41,13 @@ state.forProfile=profileDir=>{
   const row=[...state.managers.values()].find(r=>samePath(r.profileDir,profileDir));
   // A native manager exists for Profiles without body, too. Its mere presence
   // does not authorize body to claim their market operations.
-  return row&&existsSync(join(profileDir,'node_modules/fish-body/package.json'))
-    ?(row.adapter??createMarketBodyAdapter({profileDir,switchBody:row.change})):null;
+  if(!row||!existsSync(join(profileDir,'node_modules/fish-body/package.json')))return null;
+  // Codex #324 / dev18 #1：注册进来的 adapter 必须已带 Profile 配置作用域（见 install-transaction）；
+  // fallback（原生 manager 未传 adapter，如 body-manager-patch）现场造的 adapter 也要包作用域，
+  // 否则市场调 managedDirectLink/directSourceRecord/directUpdateTarget 时裸调 confFor→FH_STATE_MISSING。
+  if(row.adapter)return row.adapter;
+  return withProfileStateScope(createMarketBodyAdapter({profileDir,switchBody:row.change}),
+    join(profileDir,'fish-body-state.json'));
 };
 export function registerMarketManager(profileDir,change,adapter=null) {
   const token={}; state.managers.set(token,{profileDir,change,adapter});
@@ -157,9 +181,44 @@ export function createMarketBodyAdapter({profileDir,switchBody=null,prepare=prep
       const conf=confFor(profileDir),row=allVersions(registryOf(conf)).find(r=>r.packageName===name&&r.spec===spec&&r.formalDecisionId);
       return !!row&&!!projectPlugin({...row,state:'ready'},conf).candidate;
     },
+    // W2 纠正①③：来源判定与更新不依赖 body phase（胃关但身体开照常）。
+    // 返回「已成功安装的真实来源记录」；普通 repository 声明/未登记开发 link/generation link 返回 null。
+    directSourceRecord(name,spec) {
+      try {
+        const conf=confFor(profileDir);
+        return installedSourceRecord({frameworkRoot:dirname(conf.handRoot),profileDir,packageName:name,spec,
+          registryRows:allVersions(registryOf(conf))});
+      } catch { return null; }
+    },
+    // 市场 seam 用它判定某个 link 是否为本模块登记的受管直装 link（普通开发 link 维持原生）。
+    managedDirectLink(name,spec) {
+      try {
+        const conf=confFor(profileDir);
+        return isDirectManagedLink({frameworkRoot:dirname(conf.handRoot),profileDir,packageName:name,
+          installedSpec:spec,registryRows:allVersions(registryOf(conf))});
+      } catch { return false; }
+    },
+    // 原渠道更新目标：GitHub ref/subdir 或 npm registry/spec，直接交现有更新链；不查 catalog、不换源。
+    directUpdateTarget(name,spec) {
+      const record=this.directSourceRecord(name,spec);
+      return record?directUpdateTarget(record):null;
+    },
+    // 直装成功后登记来源（registration-only，零胃分析/零模型请求）。由 body-manager 安装后 hook 调用。
+    registerDirect({packageName,spec,sourceSpec=null,sourceUrl=null,sourceCommit=null,sourceSubdir='',registryUrl=null,
+      version=null,contentHash=null,id=null,mode='off'}={}) {
+      const frameworkRoot=dirname(confFor(profileDir).handRoot);
+      return registerDirectSource({frameworkRoot,profileDir,packageName,installedSpec:spec,sourceSpec,
+        sourceUrl,sourceCommit,sourceSubdir,registryUrl,version,contentHash,id,mode});
+    },
+    directInstallIntent(raw,options={}) { return directInstallIntent(raw,options); },
     ownsSwitch:name=>name==='fish-body'&&!!switchBody,
     async setEnabled(name,enabled) {if(name!=='fish-body'||!switchBody)return null;return switchBody(enabled);},
-    async run({args,signal,onStage=()=>{},deploy,registryUrl=null}) {
+    // 模式权威判定：显式请求 > 持久化配置 > 系统默认（compatibility）。
+    // 只决定「新请求」是否直装，与已确认任务/页面 tab 无关；胃关≠身体关，见 phase 分支。
+    async run({args,signal,onStage=()=>{},deploy,registryUrl=null,intakeMode=null}) {
+      // #315 #2：市场入口是普通安装，显式 installKind:'market' 命中 resolveInstallIntent ②固定 off，
+      // 完全不读持久化；只有显式合法 intakeMode（①explicit）才覆盖。绝不落③被持久化分析模式污染。
+      intakeMode=resolveInstallIntent({explicitIntakeMode:intakeMode,installKind:'market'}).mode;
       const phase=readBodyPhase({profileDir}).phase;
       if(phase==='off')return null; // no registry reads/audit while off
       if(phase==='closing')return {exitCode:1,timedOut:false,cancelled:false,stdout:'',stderr:'鱼的身体正在关闭，请稍后重试',wroteNothing:true};
@@ -218,13 +277,13 @@ export function createMarketBodyAdapter({profileDir,switchBody=null,prepare=prep
             const sourceUrl=github?raw.replace(/^github:/,'https://github.com/').replace(/^git\+/,'').split('#')[0]:null;
             const fixed=match&&/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(match[2]??'')?match[2]:null;
             prepared=await prepare({frameworkRoot:dirname(conf.handRoot),profileDir,spec:raw,
-              packageName:match?.[1]??null,version:fixed,sourceUrl,registryUrl,requestId:'market-'+randomUUID()}, {signal,onStage});
+              packageName:match?.[1]??null,version:fixed,sourceUrl,registryUrl,requestId:'market-'+randomUUID(),intakeMode}, {signal,onStage});
           }
           if(prepared.pendingDecision)return {exitCode:2,bodyHandled:true,wroteNothing:true,
             pendingDecision:{targets:[{target:raw,original:prepared.original,analysis:prepared.analysis}]}};
           previous=beforeRows.find(r=>r.packageName===prepared.packageName)??null;
           signal?.throwIfAborted();
-          if(!prepared.original)selectVersion(conf,profileDir,prepared.spec);
+          if(!prepared.original&&!prepared.directInstall)selectVersion(conf,profileDir,prepared.spec);
           // The native caller owns the Profile lock and deployment recovery.
           const commandIndex=args.indexOf(subcommand);
           if(prepared.original&&!readFileSync(prepared.original.archive).equals(readFileSync(prepared.original.baseline)))
@@ -236,6 +295,55 @@ export function createMarketBodyAdapter({profileDir,switchBody=null,prepare=prep
           if(result.exitCode!==0||result.timedOut||result.cancelled) {
             restorePreparedRegistration(conf,previous,prepared);
             return {...result,bodyHandled:true};
+          }
+          // W2 纠正①：直装零分析后，只登记「已成功安装的真实来源」（registration-only），
+          // 不建受管产物、不伪造审批。Codex #315 #1：登记前必须 realpath 核验原生 deploy 确实
+          // 把 link 本体落在本模块准备的 bodyPath；不满足则如实报安装实际状态，绝不冒充全成功。
+          if(prepared.directInstall) {
+            const frameworkRoot=dirname(conf.handRoot);
+            const pkgName=prepared.packageName??directInstallIntent(raw,{registryUrl})?.packageName;
+            // ① realpath 核验：当前 Profile 的 link 本体必须真实落在本次准备的 bodyPath，且在插件仓内。
+            const landedRealPath=currentLinkRealPath(profileDir,pkgName);
+            const expectedBody=prepared.bodyPath?String(prepared.bodyPath).replace(/\\/g,'/'):null;
+            const root=warehouseRoot(frameworkRoot);
+            const landed=!!landedRealPath&&!!expectedBody
+              &&pathIdentity(landedRealPath)===pathIdentity(expectedBody)
+              &&isWithinWarehouse(landedRealPath,root);
+            if(!landed) {
+              // 原生安装没把本体落到手仓路径：如实标「本体未落仓」，不算入仓成功、不登记来源。
+              return {...result,bodyHandled:true,directInstalled:false,bodyLanded:false,analysis:null,
+                authorization:'intake-off-direct',
+                sourceRegistration:{status:'body-not-landed',code:'FH_DIRECT_BODY_NOT_LANDED',
+                  reason:'原生安装后 link 本体 realpath 未落在手仓版本目录，来源未登记',
+                  expectedBodyPath:expectedBody,observedRealPath:landedRealPath}};
+            }
+            // ② 本体确已落仓，登记真实来源；身份字段取获取/解析阶段已核实的真实值。
+            let source=null;
+            try {
+              const manifest=JSON.parse(readFileSync(join(profileDir,'package.json'),'utf8'));
+              const installedSpec=manifest.dependencies?.[pkgName]??raw;
+              const intent=directInstallIntent(raw,{registryUrl});
+              source=registerDirectSource({frameworkRoot,profileDir,packageName:pkgName,installedSpec,
+                sourceSpec:intent?.sourceSpec??prepared.sourceSpec??raw,
+                sourceUrl:prepared.sourceUrl??intent?.sourceUrl,
+                sourceCommit:intent?.sourceCommit,requestedRef:prepared.requestedRef??intent?.requestedRef,
+                resolvedCommit:prepared.resolvedCommit??intent?.resolvedCommit,
+                sourceSubdir:prepared.sourceSubdir??intent?.sourceSubdir,
+                registryUrl:prepared.registryUrl??registryUrl,npmSpec:prepared.npmSpec??intent?.npmSpec,
+                version:prepared.version??installedVersion(profileDir,pkgName),
+                contentHash:prepared.contentHash,integrity:prepared.integrity,
+                bodyPath:prepared.bodyPath,pluginsRoot:root,revision:prepared.acquisition?.revision,mode:'off'});
+            } catch(error) {
+              // 本体已落仓但登记失败：如实报「本体已装、来源未登记」，不冒充已登记。
+              return {...result,bodyHandled:true,directInstalled:true,bodyLanded:true,analysis:null,
+                sourceRegistration:{status:'failed',code:error.code??'FH_DIRECT_SOURCE_REGISTER_FAILED',reason:error.message}};
+            }
+            return {...result,bodyHandled:true,directInstalled:true,bodyLanded:true,analysis:null,authorization:'intake-off-direct',
+              sourceRegistration:{status:'registered',sourceStatus:source.sourceStatus,packageName:source.packageName,
+                targetProfile:source.targetProfile,linkRealPath:source.linkRealPath,contentIdentity:source.contentIdentity,
+                contentDrift:false,updateChannel:source.updateChannel},
+              runtimeReadiness:prepared.runtimeReadiness??null,
+              acquisition:prepared.acquisition??null};
           }
           const managedLocal=verifyResult(conf,profileDir,prepared);
           return {...result,bodyHandled:true,...(prepared.original?{originalInstalled:true,analysis:prepared.analysis,

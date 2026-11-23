@@ -8,6 +8,7 @@ import { runPnpm, preparePnpmWorkspace } from './w6-package.mjs';
 import { nativeOfficialSpecs } from '../fish-hand-admission-gate.mjs';
 import { npmCommand } from './runtime-programs.mjs';
 import { reviewToolContent, marketError } from './market-source.mjs';
+import { acquireDirectBody } from './market-body-acquire.mjs';
 // Maintenance tree keeps the orchestrator beside the gate; installed modules
 // reuse the approval host's existing orchestrator rather than copying it again.
 import { FishHandOrchestrator } from '../fish-hand-orchestrator.mjs';
@@ -35,7 +36,17 @@ function fixedOriginal(collected, spec, requestId) {
     delivery:source.published?'original published tarball':'npm pack --ignore-scripts of fixed commit/subdir; no adaptation or build'};
 }
 
-export function prepareMarketPackage({frameworkRoot,profileDir,spec,requestId,sourceUrl=null,packageName=null,version=null,registryUrl=null,updateSpec=spec},report=()=>{},onSource=()=>{}) {
+export function prepareMarketPackage({frameworkRoot,profileDir,spec,requestId,sourceUrl=null,packageName=null,version=null,registryUrl=null,updateSpec=spec,intakeMode='compatibility'},report=()=>{},onSource=()=>{}) {
+  // W2 纠正①：off（关闭胃）直装与来源判定完全脱离「分析批准」。不建 pending 请求、
+  // 不跑 runW2W3（零模型请求）、不下载固定原包、不 review、不 approve、不伪造
+  // formalDecision/analysisApproved。原渠道身份原样带回，交原生安装后由登记写入器落来源。
+  if(intakeMode==='off') {
+    // #315 #1 主链：把发行包作为「运行本体」获取到手仓插件仓版本目录、装好普通依赖，
+    // 产出真实 link: 本体路径 + 内容身份。零 pending / 零 runW2W3 / 零模型请求 / 零审批。
+    // 获取或依赖准备失败会抛带 code 的错误，由子进程 IPC 如实回传，绝不伪装成功。
+    report('关闭胃：直装跳过分析，正在把手仓本体与依赖准备就绪（不执行候选生命周期脚本）');
+    return acquireDirectBody({frameworkRoot,spec,requestId,packageName,version,sourceUrl,registryUrl,mode:'off',report});
+  }
   const orchestrator=new FishHandOrchestrator({frameworkRoot});
   const ref=sourceUrl?spec.match(/#(.+)$/)?.[1]:null;
   const request=orchestrator.createPending({requestId,packageName,version,spec,sourceUrl,ref,targetProfile:profileDir,loadForm:'unknown',

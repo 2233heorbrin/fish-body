@@ -1,5 +1,21 @@
 # fish-body（鱼的身体）
 
+## Codex #330b 直装渠道标签显示定版（0.0.7-dev.22，分支测试版）
+
+本版在 dev.20 基础上按 Codex #330 唯一显示收尾：`client.js` 的 `installedChannel` 优先读后端已核实的 `install.directRegistration.sourceKind`（npm/github）还原真实来源渠道，避免直装登记的 `sourceId='local:…'` 被旧文本规则误判成「本地材料」；旧 fallback 一行不动，安装/注册/身份判定全不变。验证 UI 41/41 + w2 前端 18/18 + 饭 9/9 + review 4/4、宽窄真机图渠道标签显示「npm · 0.1.86（当前安装）」。仅本地测试分支与隔离验证，未合并 / tag / Release / registry / 未装日常。
+
+## Codex #327 饭来源与证据定向收尾定版（0.0.7-dev.20，分支测试版）
+
+本版在 dev.19 基础上按 Codex #327 做原范围最小收尾：①饭「当前安装来源」接入本轮直装登记（`rice-model.resolveInstalls` 加直装登记优先判定，当前真实直装行识别为 installed/direct-registration，历史同包不冒当前、卸载后自动撤当前、unconfirmed 文案按真实原因，旧 registry/decision/lock 规则零改动）；②饭分析入口按钮改为准确导航文案「到胃工作区查看/分析 →」并导向手·组件页已装项分析真入口（不宣称本页已采集、不造编排）；③隔离集成报告两处 evidence JSON 修正（dep 真实序列化值、peer 解析边界场景分清）。仅本地测试分支与隔离验证，未合并 / tag / Release / registry / 未装日常。
+
+## Codex #324 四项定向补修定版（0.0.7-dev.19，分支测试版）
+
+> dev.19 按 Codex #324 复核逐条补修：①配置接线——market-runtime.mjs 加 withProfileStateScope（value.apply 保 this、forProfile fallback 也包作用域）、install-transaction.js 用作用域对象替代裸摊平、去 probe 全进程 FISH_HAND_STATE，正常启动每 Profile 自动接线市场来源识别/检查/更新（A/B 决定性证据 7/7+5/5）；②GitHub 子包路径——installed-analysis.mjs materialPath 从完整仓收窄到 repoDir/subdir（realpath + 两次越界防护、空 subdir 不回归、npm 未动，专项 15/15）；③饭·一插件一卡——rice-model.mjs 仅加 displayKey/packageName 展示字段，client.js 按核实包名归一每渠道每插件一行、详情头「含未核实来源」、卡级版本只认安装版、材料行 newer 标「仅该来源材料非安装升级」、未采材料按钮如实禁用（前端 16/16 + UI 41/41 + 饭来源 9/9）；④真 DSH 插件隔离集成真 UI 点击/干净卸载/真 peer 证据见执行报告，证据分层不抬高。只改本地测试分支、未装日常、未合并/tag/Release/registry。详见 CHANGELOG dev.19 段。
+
+## 胃三模式与手插件仓接入（0.0.7-dev.18，分支测试版）
+
+> dev.17 按主人「就先按照这样、开始做吧」授权实现胃三模式与手插件仓接入：①胃工作区加 off（关闭胃）/compatibility（兼容拆分）/reverse（逆向拆分）三模式卡，只影响新请求、默认模式持久化到 fish-body-state.json 的 intakeMode（GET/POST /api/fish-body/state 读写，重启保留），off 新安装直装跳过胃分析、不建任务不调模型不伪造批准；②饭页来源 registration-only/material-absent 四值口径，正常市场直装只登记来源、要分析才采材料；③手页「原生安装·未拆分」与真实状态、从已装项显式进入分析；④市场直装本体入手仓（link: 原生引用）、真实受管来源登记、检查更新走原渠道不换源（directSourceFor 一个通道贯穿 updateCheckInputs/summary/单条/列表/cacheKey/updates.js/stillLocal）。node --check、UI 契约 41/41、W2 前端 9/9、off 专项 8/8、rice-source 9/9、rice-group 21/21、install-wiring 10/10、review-fix 4/4、纵向链反例 12/12 全绿。仅本地测试分支，详见 CHANGELOG dev.17 段与本轮执行报告。
+
 ## 鱼身体主导航迁移 + 饭页两渠道布局（0.0.7-dev.16，分支测试版）
 
 > dev.16 把鱼身体入口从设置侧栏迁到 DSH 主侧栏（main keyed panel + sidebar.panellist，返回会话走 `ctx.get('layout')?.selectPanel(null)`），饭·来源页改为左紧凑列表 + 右唯一详情、GitHub 仓库 / npm 两渠道分段切换与缺材料提示；并按 Codex #283 修正饭页渲染四处偏差（版本结论正文可见、stateTag 只认当前渠道有效检查、列表定高可滚动、链接统一「查看来源」）；后端与依赖不动。node --check、UI 契约 41/41、注入法真实渲染全绿；本轮另完成 dev.16 本地打包 + 隔离 DSH 原生安装 + Edge 真机截图，详见同目录执行报告。详见 CHANGELOG dev.16 段。

@@ -1,5 +1,5 @@
 import { dirname, join } from 'node:path'
-import { mkdirSync, writeFileSync, renameSync } from 'node:fs'
+import { mkdirSync, writeFileSync, renameSync, readFileSync, existsSync } from 'node:fs'
 import { apply as mountApproval } from './backend/fish-body-approval.mjs'
 import { withStateConfig } from './backend/production-state.mjs'
 import { createMarketBodyAdapter, registerMarketManager } from './backend/lib/market-runtime.mjs'
@@ -8,12 +8,22 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { createInstallTransaction } from './install-transaction.js'
 import { BINDING_FILE } from './profile-data.js'
+import { INTAKE_MODES, DEFAULT_INTAKE_MODE, INTAKE_MODE_KEY } from './analysis/intake-mode.mjs'
 
 /** Full existing backend, scoped to this Profile. No process-global environment mutation. */
 export function configureBackend(state, { packageManager = null, installAnchor = null } = {}) {
   const profileDir = state.profileDir, hand = state.paths.hand
   const configPath = join(profileDir, 'fish-body-state.json')
-  const conf = { packageManager, installAnchor, mode: 'production', frameworkRoot: state.root, handRoot: hand,
+  // 用户默认工作模式（intake mode: off/compatibility/reverse）来自 UI 持久化写入，
+  // 与部署用 mode:'production' 分开。每次启动重写 conf 时须保留用户已选值，不回退默认。
+  let intakeMode = DEFAULT_INTAKE_MODE
+  try {
+    if (existsSync(configPath)) {
+      const previous = JSON.parse(readFileSync(configPath, 'utf8'))
+      if (INTAKE_MODES.includes(previous[INTAKE_MODE_KEY])) intakeMode = previous[INTAKE_MODE_KEY]
+    }
+  } catch { /* 配置损坏时回退默认，不阻断后端装载 */ }
+  const conf = { packageManager, installAnchor, mode: 'production', [INTAKE_MODE_KEY]: intakeMode, frameworkRoot: state.root, handRoot: hand,
     registryPath: join(hand, '插件注册表', 'registry.json'),
     requestsRoot: join(hand, '插件注册表', 'requests'),
     artifactsRoot: join(hand, '插件仓'), decisionsRoot: join(hand, '插件注册表', 'decisions'),
